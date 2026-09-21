@@ -47,3 +47,7 @@ Rename `RtaSubscription` to `XboxRTASubscription` and `subscription.data` to
 handshake; the `data` event carries subsequent notifications. Listen for `disconnect(code,
 reason)` to observe remote connection loss. The socket's `close` event now has no arguments
 and is emitted once on terminal local shutdown, rather than on remote disconnection.
+
+Call `await socket.init(options)` for asynchronous setup. The former public `connect(options)`
+entry point is now `init`; `connect(nonce, signal)` is the internal transport step that opens
+the WebSocket. The socket event handlers are class arrow fields bound to the socket instance.

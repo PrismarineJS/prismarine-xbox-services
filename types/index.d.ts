@@ -112,7 +112,7 @@ export class RTARequestError extends SocketError {
 }
 export class XboxRTASocket extends EventEmitter {
   constructor(authflow: XboxTokenProvider)
-  connect(options?: OperationOptions): Promise<void>
+  init(options?: OperationOptions): Promise<void>
   reconnect(): Promise<void>
   subscribe<T = unknown>(uri: string, options?: OperationOptions): Promise<XboxRTASubscription<T>>
   close(): Promise<void>

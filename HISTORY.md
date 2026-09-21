@@ -1,5 +1,7 @@
 ## Unreleased
 
+- Use init() for RTA setup, connect() for socket opening, and class-bound socket event handlers.
+
 - Rename XboxRTASubscription and its initialData property; distinguish disconnect from terminal close.
 - Scope native socket listeners to each connection and clarify internal operation names.
 

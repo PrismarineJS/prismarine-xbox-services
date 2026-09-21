@@ -49,7 +49,7 @@ it('restores native WebSocket subscriptions before reconnect resolves', async ()
         }
       })
     })
-    await rta.connect()
+    await rta.init()
     const subscription = await rta.subscribe('https://sessiondirectory.xboxlive.com/connections/')
     assert(subscription instanceof XboxRTASubscription)
     assert.equal(subscription.initialData.ConnectionId, 'local-42')
@@ -77,7 +77,7 @@ it('restores native WebSocket subscriptions before reconnect resolves', async ()
 it('automatically answers server pings and releases local work when the peer stalls', async () => {
   await withServer(async (rta, server) => {
     const connected = once(server, 'connection')
-    await rta.connect()
+    await rta.init()
     const [peer] = await connected
     const pong = once(peer, 'pong')
     peer.ping('probe')
@@ -110,11 +110,11 @@ for (const failure of ['timeout', 'status']) {
           else if (failure === 'status') socket.send(JSON.stringify([1, sequenceId, 1001]))
         })
       })
-      await rta.connect({ timeout: 100 })
+      await rta.init({ timeout: 100 })
       await rta.subscribe('test')
       await assert.rejects(rta.reconnect(), failure === 'status' ? RTARequestError : /timed out/)
       assert.equal(rta.ws, null)
-      assert.equal(rta._connectController, null)
+      assert.equal(rta._initController, null)
       assert.equal(rta.reconnectTimeout, null)
       assert.equal(errors, 0)
     })
@@ -137,7 +137,7 @@ it('aborts a native WebSocket while its HTTP upgrade is pending', async () => {
   try {
     const controller = new AbortController()
     const upgraded = once(server, 'upgrade')
-    const connecting = assert.rejects(rta.connect({ signal: controller.signal }), /cancel startup/)
+    const connecting = assert.rejects(rta.init({ signal: controller.signal }), /cancel startup/)
     await upgraded
     const socket = rta.ws
     const closed = once(socket, 'close')
@@ -159,7 +159,7 @@ it('reports nonce HTTP failures with structured service errors', async () => {
   global.fetch = async () => new Response('unavailable', { status: 503 })
   const rta = new XboxRTASocket(auth)
   try {
-    await assert.rejects(rta.connect(), error => {
+    await assert.rejects(rta.init(), error => {
       assert(error instanceof ServiceError)
       assert.equal(error.service, 'Xbox RTA')
       assert.equal(error.status, 503)
@@ -179,14 +179,14 @@ it('distinguishes remote disconnection from idempotent terminal closure', async 
     let closes = 0
     rta.on('close', () => { closes++ })
     const connected = once(server, 'connection')
-    await rta.connect()
+    await rta.init()
     const [peer] = await connected
     const disconnected = once(rta, 'disconnect')
     peer.close(1000, 'server restart')
     assert.deepEqual(await disconnected, [1000, 'server restart'])
     assert.equal(closes, 0)
     assert.equal(rta.closed, false)
-    await rta.connect()
+    await rta.init()
     await rta.close()
     await rta.close()
     assert.equal(closes, 1)

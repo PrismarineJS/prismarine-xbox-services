@@ -12,16 +12,16 @@ function deferred () {
 }
 
 describe('managed sessions', () => {
-  let originalFetch, connect, subscribe, requests, subscription, rta, document
+  let originalFetch, init, subscribe, requests, subscription, rta, document
   beforeEach(() => {
     originalFetch = global.fetch
-    connect = XboxRTASocket.prototype.connect
+    init = XboxRTASocket.prototype.init
     subscribe = XboxRTASocket.prototype.subscribe
     requests = []
     document = { properties: { custom: { game: 'example' } } }
     subscription = new EventEmitter()
     subscription.initialData = { ConnectionId: 'connection' }
-    XboxRTASocket.prototype.connect = async function () { rta = this }
+    XboxRTASocket.prototype.init = async function () { rta = this }
     XboxRTASocket.prototype.subscribe = async () => subscription
     global.fetch = async (url, options) => {
       const body = options.body && JSON.parse(options.body)
@@ -33,7 +33,7 @@ describe('managed sessions', () => {
   })
   afterEach(() => {
     global.fetch = originalFetch
-    XboxRTASocket.prototype.connect = connect
+    XboxRTASocket.prototype.init = init
     XboxRTASocket.prototype.subscribe = subscribe
   })
 
@@ -247,7 +247,7 @@ describe('managed sessions', () => {
     await tick()
     assert(requests.some(r => r.body?.members?.me?.properties?.system?.connection === 'replacement'))
     const failure = new Promise(resolve => session.once('error', resolve))
-    rta._onDisconnect(1000, 'shutdown')
+    rta.onSocketClose({ code: 1000, reason: 'shutdown' })
     assert.match((await failure).message, /shutdown/)
     assert.equal(session.state, 'closed')
   })

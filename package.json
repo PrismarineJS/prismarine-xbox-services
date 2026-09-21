@@ -10,6 +10,9 @@
     "fix": "standard --fix",
     "typecheck": "tsc --noEmit --strict --target ES2022 --module commonjs --moduleResolution node test/types.ts"
   },
+  "standard": {
+    "globals": ["WebSocket", "CloseEvent"]
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/PrismarineJS/prismarine-xbox-services.git"
