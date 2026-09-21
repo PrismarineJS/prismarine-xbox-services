@@ -4,29 +4,35 @@
 
 Xbox and PlayFab services API for Node.js.
 
-## Status
+## Usage
 
-This repository currently contains the package scaffold. The services implementation is being
-extracted from the existing PrismarineJS projects; no service API is available here yet.
-The initial API will be experimental while the extraction settles.
+Node.js 22 or newer is required. The API is experimental; coordinate version updates with consumers.
 
-## Scope
+```js
+const { XboxClient, SessionDirectory, XboxRTA, PlayFabClient } = require('prismarine-xbox-services')
+const { Authflow } = require('prismarine-auth')
+const auth = new Authflow(username, cacheDirectory, authOptions)
+const xbox = new XboxClient(auth)
+const profile = await xbox.getProfile('me')
+```
 
-The planned package provides:
+Supply your existing Authflow; sign-in, token acquisition, caching and refresh stay in
+[prismarine-auth](https://github.com/PrismarineJS/prismarine-auth). The package has no runtime
+dependency on prismarine-auth and accepts compatible credential providers.
 
-- Xbox profiles, multiplayer sessions, invitations, and activity publishing.
-- Xbox Real Time Activity (RTA) connections and subscriptions.
-- PlayFab service operations through an isolated `PlayFabClient`, as concrete use cases are added.
+- [XboxClient and SessionDirectory](docs/xbox.md): profiles, multiplayer sessions, invitations,
+  and activity publishing with caller-provided title configuration.
+- [XboxRTA](docs/rta.md): Real Time Activity connections, subscriptions and lifecycle management.
+- [PlayFabClient](docs/playfab.md): isolated authenticated PlayFab requests with caller-provided
+  credentials and title ID.
 
-Service clients will accept an existing [`prismarine-auth`](https://github.com/PrismarineJS/prismarine-auth)
-Authflow for credentials. Sign-in, token acquisition, caching, and refresh remain in that package.
-Minecraft-specific title configuration, world metadata, and protocol behavior belong to consumers.
+Minecraft title defaults, world metadata and game protocol behavior belong to consumers.
+The focus is services needed by Minecraft clients and bots, with reusable configuration for
+other applications. See the [architecture proposal](https://github.com/PrismarineJS/prismarine-auth/issues/185)
+and [source provenance](docs/provenance.md).
 
-The focus is services needed by Minecraft clients and bots, with reusable configuration for other
-applications. This is not a commitment to implement every Xbox or PlayFab endpoint.
-
-See the [architecture proposal](https://github.com/PrismarineJS/prismarine-auth/issues/185)
-for package boundaries and the migration plan.
+Tests cover mocked service boundaries and local WebSocket connections. Live authenticated
+Xbox and PlayFab integration still needs verification with title-specific credentials.
 
 ## Development
 
@@ -44,4 +50,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution and release notes.
 
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE). Incorporated code retains its [original license notices](licenses/).
