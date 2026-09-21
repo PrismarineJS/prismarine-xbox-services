@@ -18,4 +18,13 @@ class SocketAlreadyConnectedError extends SocketError {
   constructor () { super('RTA connection already started') }
 }
 
-module.exports = { MessageType, StatusCode, convertRTAStatus, SocketError, SocketClosedError, SocketNotConnectedError, SocketAlreadyConnectedError }
+class RTARequestError extends SocketError {
+  constructor (status) {
+    const code = convertRTAStatus(status)
+    super(`RTA request failed: ${status} ${code}`)
+    this.status = status
+    this.code = code
+  }
+}
+
+module.exports = { MessageType, StatusCode, convertRTAStatus, SocketError, SocketClosedError, SocketNotConnectedError, SocketAlreadyConnectedError, RTARequestError }

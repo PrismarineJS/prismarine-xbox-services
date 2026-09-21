@@ -1,10 +1,10 @@
 /* eslint-env mocha */
 const assert = require('assert/strict')
-const { XboxRTASocket, SocketError, SocketClosedError, SocketNotConnectedError } = require('..')
+const { XboxRTASocket, SocketError, SocketClosedError, SocketNotConnectedError, RTARequestError } = require('..')
 const tick = () => new Promise(resolve => setImmediate(resolve))
 function ready () {
   const rta = new XboxRTASocket({})
-  rta.ws = { readyState: 1, send () {}, on () {}, terminate () {} }
+  rta.ws = { readyState: 1, send () {}, close () {} }
   return rta
 }
 
@@ -61,7 +61,7 @@ it('keeps subscription identity across reconnect responses and routes data to it
   assert.equal(sent[0][2], 'test/"quoted"')
   let updated
   sub.on('ready', data => { updated = data })
-  rta.onOpen()
+  await rta.onOpen()
   await tick()
   assert.equal(sub.data.generation, 1)
   assert.equal(updated.generation, 1)
@@ -79,7 +79,12 @@ it('rejects subscription failures without also emitting an error', async () => {
   const rta = ready()
   rta.ws.send = () => rta.onMessage('[1,0,1001]')
   // No error listener is necessary for an awaited request rejection.
-  await assert.rejects(rta.subscribe('test'), /Throttled/)
+  await assert.rejects(rta.subscribe('test'), error => {
+    assert(error instanceof RTARequestError)
+    assert.equal(error.status, 1001)
+    assert.equal(error.code, 'Throttled')
+    return true
+  })
   assert.equal(rta._subscriptions.size, 0)
   await rta.close()
 })
@@ -151,9 +156,10 @@ it('closing during resubscribe prevents resurrection and cleans up a late wire r
     if (type === 2) rta.onMessage(JSON.stringify([2, sequence, 0]))
   }
   const sub = await rta.subscribe('test')
-  rta.onOpen()
+  const restoring = rta.onOpen()
   await tick()
   await sub.close()
+  await restoring
   rta.onMessage('[1,1,0,43,{}]')
   await tick()
   await rta.close()

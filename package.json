@@ -28,6 +28,7 @@
   },
   "homepage": "https://github.com/PrismarineJS/prismarine-xbox-services#readme",
   "devDependencies": {
+    "ws": "^8.18.0",
     "standard": "^17.0.0",
     "mocha": "^11.1.0",
     "prismarine-xbox-services": "file:.",
@@ -47,7 +48,6 @@
   "types": "types/index.d.ts",
   "dependencies": {
     "debug": "^4.3.4",
-    "json-bigint": "^1.0.0",
-    "ws": "^8.18.0"
+    "json-bigint": "^1.0.0"
   }
 }

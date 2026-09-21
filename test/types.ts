@@ -1,5 +1,5 @@
 import { Authflow } from 'prismarine-auth'
-import { XboxClient, XboxSession, XboxRTASocket, PlayFabClient, ServiceError, SocketError, SocketClosedError, SocketNotConnectedError, SocketAlreadyConnectedError } from '..'
+import { XboxClient, XboxSession, XboxRTASocket, PlayFabClient, ServiceError, RTARequestError, SocketError, SocketClosedError, SocketNotConnectedError, SocketAlreadyConnectedError } from '..'
 
 async function example () {
   const auth = new Authflow('example')
@@ -24,6 +24,7 @@ async function example () {
   new XboxSession()
   const rta = new XboxRTASocket(auth)
   await rta.connect().catch(error => {
+    if (error instanceof RTARequestError) console.log(error.status, error.code)
     if (error instanceof SocketError) console.log(error.name)
     if (error instanceof SocketClosedError || error instanceof SocketNotConnectedError || error instanceof SocketAlreadyConnectedError) console.log(error.message)
   })

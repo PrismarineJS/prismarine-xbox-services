@@ -105,6 +105,11 @@ export class SocketNotConnectedError extends SocketError {
 export class SocketAlreadyConnectedError extends SocketError {
   constructor()
 }
+export class RTARequestError extends SocketError {
+  constructor(status: number)
+  readonly status: number
+  readonly code: string
+}
 export class XboxRTASocket extends EventEmitter {
   constructor(authflow: XboxTokenProvider)
   connect(options?: OperationOptions): Promise<void>

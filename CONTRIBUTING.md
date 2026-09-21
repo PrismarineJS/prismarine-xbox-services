@@ -6,7 +6,7 @@ Pull requests target `main`.
 
 ## Checks
 
-Install dependencies with `npm install`, then run `npm test`. CI checks Node.js 22 and 24.
+Install dependencies with `npm install`, then run `npm test`. CI checks Node.js 24.
 Use JavaScript Standard Style. Add regression coverage for service behavior and lifecycle
 changes; automated tests should not require live Xbox accounts or credentials.
 

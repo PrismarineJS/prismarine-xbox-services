@@ -1,6 +1,7 @@
-const { SocketError, SocketClosedError, SocketNotConnectedError, SocketAlreadyConnectedError } = require('./rta/constants')
+const { SocketError, SocketClosedError, SocketNotConnectedError, SocketAlreadyConnectedError, RTARequestError } = require('./rta/constants')
 
 module.exports = {
+  RTARequestError,
   SocketError,
   SocketClosedError,
   SocketNotConnectedError,

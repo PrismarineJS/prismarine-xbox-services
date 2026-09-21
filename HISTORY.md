@@ -1,5 +1,8 @@
 ## Unreleased
 
+- Use native WebSocket, retain ws only for tests, and remove the unverified pong watchdog.
+- Await subscription restoration on reconnect and expose structured RTA request/nonce failures.
+
 - Rename XboxRTA to XboxRTASocket and expose socket lifecycle error classes.
 - Require Node.js 24 or newer.
 

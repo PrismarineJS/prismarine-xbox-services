@@ -36,3 +36,8 @@ The existing XboxClient, XboxSession, XboxRTASocket and PlayFabClient classes re
 Rename `XboxRTA` imports and constructors to `XboxRTASocket`; there is no compatibility alias.
 Socket lifecycle failures now expose the error classes documented in [RTA](rta.md), so callers
 can use `instanceof` instead of matching message text. Node.js 24 or newer is required.
+
+`reconnect()` now waits for subscription restoration, not just socket opening. New subscriptions
+must wait until it resolves. Native WebSocket replaces the runtime `ws` dependency; see
+[RTA transport semantics](rta.md#native-websocket-transport) for the graceful shutdown limitation
+and removal of the unverified pong watchdog.
