@@ -23,19 +23,19 @@ async function withSocket (run) {
   try { await run(rta, sockets) } finally { await rta.close(); global.WebSocket = Original; global.fetch = originalFetch }
 }
 
-test('init waits for open and removes the startup deadline after success', async () => {
+test('connect waits for open and removes the startup deadline after success', async () => {
   await withSocket(async (rta, sockets) => {
     let connected = false
     const controller = new AbortController()
-    const connecting = rta.init({ timeout: 30, signal: controller.signal }).then(() => { connected = true })
+    const connecting = rta.connect({ timeout: 30, signal: controller.signal }).then(() => { connected = true })
     await tick()
     assert.equal(connected, false)
-    await assert.rejects(rta.init(), SocketAlreadyConnectedError)
+    await assert.rejects(rta.connect(), SocketAlreadyConnectedError)
     sockets[0].open()
     await connecting
     assert.equal(connected, true)
-    await assert.rejects(rta.init(), SocketAlreadyConnectedError)
-    assert.equal(rta._initController, null)
+    await assert.rejects(rta.connect(), SocketAlreadyConnectedError)
+    assert.equal(rta._connectController, null)
     controller.abort()
     await new Promise(resolve => setTimeout(resolve, 40))
     assert.equal(sockets[0].closeCalls, 0)
@@ -46,7 +46,7 @@ for (const action of ['timeout', 'abort', 'destroy', 'error', 'close']) {
   test(`rejects and releases a pending handshake on ${action}`, async () => {
     await withSocket(async (rta, sockets) => {
       const controller = new AbortController()
-      const connecting = assert.rejects(rta.init({ timeout: 20, signal: controller.signal }))
+      const connecting = assert.rejects(rta.connect({ timeout: 20, signal: controller.signal }))
       await tick()
       assert.equal(sockets.length, 1)
       const socket = sockets[0]
@@ -57,7 +57,7 @@ for (const action of ['timeout', 'abort', 'destroy', 'error', 'close']) {
       await connecting
       assert.equal(socket.closeCalls, 1)
       assert.equal(rta.ws, null)
-      assert.equal(rta._initController, null)
+      assert.equal(rta._connectController, null)
       assert.equal(rta.reconnectTimeout, null)
     })
   })
@@ -65,7 +65,7 @@ for (const action of ['timeout', 'abort', 'destroy', 'error', 'close']) {
 
 test('normal server close clears timers and pending requests and permits reconnect', async () => {
   await withSocket(async (rta, sockets) => {
-    const first = rta.init()
+    const first = rta.connect()
     await tick()
     sockets[0].open()
     await first
@@ -74,19 +74,19 @@ test('normal server close clears timers and pending requests and permits reconne
     await pending
     assert.equal(rta.ws, null)
     assert.equal(rta.reconnectTimeout, null)
-    const second = rta.init()
+    const second = rta.connect()
     await tick()
     sockets[1].open()
     await second
     assert.equal(rta.ws, sockets[1])
     await rta.close()
-    await assert.rejects(rta.init(), SocketClosedError)
+    await assert.rejects(rta.connect(), SocketClosedError)
   })
 })
 
 test('an older aborted startup cannot release its replacement socket', async () => {
   await withSocket(async (rta, sockets) => {
-    const first = assert.rejects(rta.init(), /reconnecting/)
+    const first = assert.rejects(rta.connect(), /reconnecting/)
     await tick()
     const replacement = rta.reconnect()
     await tick()

@@ -13,7 +13,7 @@ const REQUEST_TIMEOUT_MS = 30_000
 
 class XboxRTASocket extends EventEmitter {
   _pendingRequests = new Map()
-  _initController = null
+  _connectController = null
   _socketListeners = null
   closed = false
   _subscriptions = new Set()
@@ -25,52 +25,51 @@ class XboxRTASocket extends EventEmitter {
     this.authflow = authflow
   }
 
-  async init (options = {}) {
+  async connect (options = {}) {
     if (this.closed) throw new SocketClosedError()
-    if (this._initController || this.ws) throw new SocketAlreadyConnectedError()
+    if (this._connectController || this.ws) throw new SocketAlreadyConnectedError()
     this.options = { timeout: options.timeout }
     const controller = new AbortController()
-    this._initController = controller
-    const start = async signal => {
-      signal.throwIfAborted()
-      const xbl = await this.authflow.getXboxToken('http://xboxlive.com')
-      const authorization = `XBL3.0 x=${xbl.userHash};${xbl.XSTSToken}`
-      signal.throwIfAborted()
-      const nonceResponse = await fetch(NONCE_URL, {
-        headers: { authorization },
-        signal,
-        redirect: 'error'
-      })
-      if (!nonceResponse.ok) {
-        throw new ServiceError('Xbox RTA', nonceResponse.status, await nonceResponse.text())
-      }
-      const { nonce } = await nonceResponse.json()
-      signal.throwIfAborted()
-      await this.connect(nonce, signal)
-      await this._restoreSubscriptions(signal)
-      signal.throwIfAborted()
-      debug('RTA connected and subscriptions restored')
-      this.reconnectTimeout = setTimeout(() => {
-        this.reconnect().catch(error => {
-          if (!this.closed) this.emit('error', error)
-        })
-      }, CONNECTION_RENEWAL_MS)
-    }
+    this._connectController = controller
     try {
-      await operation(start, options, controller.signal)
+      await operation(async signal => {
+        signal.throwIfAborted()
+        const xbl = await this.authflow.getXboxToken('http://xboxlive.com')
+        const authorization = `XBL3.0 x=${xbl.userHash};${xbl.XSTSToken}`
+        signal.throwIfAborted()
+        const nonceResponse = await fetch(NONCE_URL, {
+          headers: { authorization },
+          signal,
+          redirect: 'error'
+        })
+        if (!nonceResponse.ok) {
+          throw new ServiceError('Xbox RTA', nonceResponse.status, await nonceResponse.text())
+        }
+        const { nonce } = await nonceResponse.json()
+        signal.throwIfAborted()
+        await this._connectSocket(nonce, signal)
+        await this._restoreSubscriptions(signal)
+        signal.throwIfAborted()
+        debug('RTA connected and subscriptions restored')
+        this.reconnectTimeout = setTimeout(() => {
+          this.reconnect().catch(error => {
+            if (!this.closed) this.emit('error', error)
+          })
+        }, CONNECTION_RENEWAL_MS)
+      }, options, controller.signal)
     } catch (error) {
       // An older cancelled attempt must not clean up a replacement connection.
-      if (this._initController === controller) this.releaseConnection(error)
+      if (this._connectController === controller) this.releaseConnection(error)
       throw error
     } finally {
-      if (this._initController === controller) this._initController = null
+      if (this._connectController === controller) this._connectController = null
     }
   }
 
   async close () {
     if (this.closed) return
     this.closed = true
-    this._initController?.abort(new SocketClosedError())
+    this._connectController?.abort(new SocketClosedError())
     this.releaseConnection(new SocketClosedError())
     for (const subscription of this._subscriptions) subscription._dispose()
     this._subscriptions.clear()
@@ -79,10 +78,10 @@ class XboxRTASocket extends EventEmitter {
 
   async reconnect () {
     if (this.closed) throw new SocketClosedError()
-    this._initController?.abort(new SocketError('RTA connection reconnecting'))
+    this._connectController?.abort(new SocketError('RTA connection reconnecting'))
     this.releaseConnection(new SocketError('RTA connection reconnecting'))
-    this._initController = null
-    return this.init(this.options)
+    this._connectController = null
+    return this.connect(this.options)
   }
 
   // Shared by server close, failed startup and explicit destruction.
@@ -103,7 +102,7 @@ class XboxRTASocket extends EventEmitter {
 
   async subscribe (uri, options = {}) {
     if (this.closed) throw new SocketClosedError()
-    if (this._initController) throw new SocketNotConnectedError()
+    if (this._connectController) throw new SocketNotConnectedError()
     const subscription = new XboxRTASubscription(this, uri)
     try {
       await this._subscribe(subscription, options)
@@ -156,7 +155,7 @@ class XboxRTASocket extends EventEmitter {
     }
   }
 
-  async connect (nonce, signal) {
+  async _connectSocket (nonce, signal) {
     signal.throwIfAborted()
     const socket = new WebSocket(`${SOCKET_URL}?nonce=${encodeURIComponent(nonce)}`, SOCKET_PROTOCOL)
     this.ws = socket
@@ -183,20 +182,20 @@ class XboxRTASocket extends EventEmitter {
   onSocketError = event => {
     const error = event.error || new SocketError(event.message || 'RTA WebSocket failed')
     debug('RTA error', error)
-    if (this._initController) this._initController.abort(error)
+    if (this._connectController) this._connectController.abort(error)
     else if (!this.closed) this.emit('error', error)
   }
 
   onSocketClose = ({ code, reason }) => {
-    if (this._initController) {
-      this._initController.abort(new SocketClosedError(`RTA connection closed: ${code} ${reason}`))
+    if (this._connectController) {
+      this._connectController.abort(new SocketClosedError(`RTA connection closed: ${code} ${reason}`))
       return
     }
     debug(`RTA disconnected: ${code} ${reason}`)
     this.releaseConnection(new SocketClosedError(`RTA connection closed: ${code} ${reason}`))
     this.emit('disconnect', code, reason)
     if (code === 1006 && !this.closed) {
-      this.init(this.options).catch(error => {
+      this.connect(this.options).catch(error => {
         if (!this.closed) { this.emit('error', error) }
       })
     }

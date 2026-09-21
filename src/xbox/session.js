@@ -34,7 +34,7 @@ class XboxSession extends EventEmitter {
         const requestOptions = { signal, timeout }
         const profile = await client.getProfile('me', requestOptions)
         signal.throwIfAborted()
-        await session._rta.init(requestOptions)
+        await session._rta.connect(requestOptions)
         const subscription = await session._rta.subscribe('https://sessiondirectory.xboxlive.com/connections/', requestOptions)
         signal.throwIfAborted()
         // Queue refreshes even during startup so a reconnect cannot lose its new connection ID.

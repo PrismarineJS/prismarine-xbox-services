@@ -28,7 +28,7 @@ it('rejects requests made before connecting rather than silently queuing', async
   await assert.rejects(rta.subscribe('test'), SocketNotConnectedError)
   assert.equal(rta._subscriptions.size, 0)
   await rta.close()
-  for (const call of [() => rta.init(), () => rta.reconnect(), () => rta.subscribe('test')]) {
+  for (const call of [() => rta.connect(), () => rta.reconnect(), () => rta.subscribe('test')]) {
     await assert.rejects(call(), error => {
       assert(error instanceof SocketClosedError)
       assert(error instanceof SocketError)
@@ -122,7 +122,7 @@ it('bounds authentication and prevents late requests without forcing token refre
           return new Promise(resolve => { resolveToken = resolve })
         }
       })
-      const connecting = assert.rejects(rta.init({ timeout: 10 }), cancel ? /closed/ : /timed out/)
+      const connecting = assert.rejects(rta.connect({ timeout: 10 }), cancel ? /closed/ : /timed out/)
       await tick()
       if (cancel) await rta.close()
       await connecting

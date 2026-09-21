@@ -6,7 +6,7 @@ const rta = new XboxRTASocket(auth)
 rta.on('error', handleBackgroundFailure)
 rta.on('resync', refreshAuthoritativeState)
 try {
-  await rta.init({ timeout: 15000, signal })
+  await rta.connect({ timeout: 15000, signal })
   const subscription = await rta.subscribe('https://sessiondirectory.xboxlive.com/connections/')
   console.log(subscription.initialData)
   subscription.on('data', handleNotification)
@@ -18,7 +18,7 @@ try {
 }
 ```
 
-- `init({ timeout = 15000, signal } = {})` resolves once the WebSocket opens and existing subscriptions are restored. Its deadline
+- `connect({ timeout = 15000, signal } = {})` resolves once the WebSocket opens and existing subscriptions are restored. Its deadline
   covers credentials, nonce retrieval, handshake and restoration of existing subscriptions. The signal applies only to startup.
 - `subscribe(uri, { timeout = 30000, signal } = {})` returns a stable XboxRTASubscription.
   Await connection first; disconnected requests reject instead of accumulating in a queue.
@@ -32,12 +32,12 @@ try {
 - `close()` shuts down the connection and all its subscriptions. It is terminal and idempotent, emitting `close()` once after local cleanup.
 - `reconnect()` explicitly replaces the connection and starts restoring subscriptions. Its
   promise resolves after all remaining subscriptions are restored; each subscription emits `ready`.
-  Restoration shares the connection deadline configured by `init()`. A restoration failure
+  Restoration shares the connection deadline configured by `connect()`. A restoration failure
   rejects reconnect and releases the replacement connection. New subscriptions must wait for
-  init/reconnect to finish.
+  connect/reconnect to finish.
 
 Closure of an established remote connection emits `disconnect(code, reason)`. Normal closure permits later
-explicit init/reconnect. Local close/reconnect does not emit `disconnect`; `close` is
+explicit connect/reconnect. Local close/reconnect does not emit `disconnect`; `close` is
 reserved for the terminal `socket.close()` operation, even if never connected.
 Abnormal close (1006) and 90-minute renewal initiate reconnection. Failed
 background reconnect/restoration emits `error`; there is no unbounded retry loop. A `resync`
@@ -57,10 +57,10 @@ extend `SocketError`. They can be caught with `instanceof`; their `name` matches
 An explicit reconnect rejects interrupted work with `SocketError`. Service failures,
 timeouts and caller cancellation retain their existing errors/reasons.
 
-`init()` performs asynchronous authentication, nonce acquisition and subscription setup.
-Internally it calls `connect(nonce, signal)` to open the native WebSocket and attach the
+`connect()` performs asynchronous authentication, nonce acquisition and subscription setup.
+Internally it calls `_connectSocket(nonce, signal)` to open the native WebSocket and attach the
 class's `onSocketError`, `onSocketClose` and `onSocketMessage` handlers. Consumers should
-call `init()` for complete setup rather than invoking the transport helper directly.
+call `connect()` for complete setup rather than invoking the transport helper directly.
 
 ## Native WebSocket transport
 

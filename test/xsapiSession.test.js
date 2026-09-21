@@ -12,16 +12,16 @@ function deferred () {
 }
 
 describe('managed sessions', () => {
-  let originalFetch, init, subscribe, requests, subscription, rta, document
+  let originalFetch, connect, subscribe, requests, subscription, rta, document
   beforeEach(() => {
     originalFetch = global.fetch
-    init = XboxRTASocket.prototype.init
+    connect = XboxRTASocket.prototype.connect
     subscribe = XboxRTASocket.prototype.subscribe
     requests = []
     document = { properties: { custom: { game: 'example' } } }
     subscription = new EventEmitter()
     subscription.initialData = { ConnectionId: 'connection' }
-    XboxRTASocket.prototype.init = async function () { rta = this }
+    XboxRTASocket.prototype.connect = async function () { rta = this }
     XboxRTASocket.prototype.subscribe = async () => subscription
     global.fetch = async (url, options) => {
       const body = options.body && JSON.parse(options.body)
@@ -33,7 +33,7 @@ describe('managed sessions', () => {
   })
   afterEach(() => {
     global.fetch = originalFetch
-    XboxRTASocket.prototype.init = init
+    XboxRTASocket.prototype.connect = connect
     XboxRTASocket.prototype.subscribe = subscribe
   })
 

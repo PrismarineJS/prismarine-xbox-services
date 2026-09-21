@@ -48,6 +48,5 @@ handshake; the `data` event carries subsequent notifications. Listen for `discon
 reason)` to observe remote connection loss. The socket's `close` event now has no arguments
 and is emitted once on terminal local shutdown, rather than on remote disconnection.
 
-Call `await socket.init(options)` for asynchronous setup. The former public `connect(options)`
-entry point is now `init`; `connect(nonce, signal)` is the internal transport step that opens
-the WebSocket. The socket event handlers are class arrow fields bound to the socket instance.
+Use `await socket.connect(options)` for complete setup. Internally `_connectSocket(nonce, signal)`
+opens the WebSocket and attaches class-bound event handlers; there is no separate initialization step.

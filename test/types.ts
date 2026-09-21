@@ -23,7 +23,7 @@ async function example () {
   // @ts-expect-error Sessions are returned by factories, not constructed directly.
   new XboxSession()
   const rta = new XboxRTASocket(auth)
-  await rta.init().catch(error => {
+  await rta.connect().catch(error => {
     if (error instanceof RTARequestError) console.log(error.status, error.code)
     if (error instanceof SocketError) console.log(error.name)
     if (error instanceof SocketClosedError || error instanceof SocketNotConnectedError || error instanceof SocketAlreadyConnectedError) console.log(error.message)
