@@ -1,5 +1,5 @@
 // Bound the entire operation, including credential providers that cannot be aborted.
-async function operation (run, { signal, timeout = 15000 } = {}, lifetime) {
+async function withDeadline (run, { signal, timeout = 15000 } = {}, lifetime) {
   const controller = new AbortController()
   const combined = AbortSignal.any([controller.signal, ...[signal, lifetime].filter(Boolean)])
   const timer = setTimeout(() => controller.abort(new Error('Operation timed out')), timeout)
@@ -19,4 +19,4 @@ async function operation (run, { signal, timeout = 15000 } = {}, lifetime) {
     combined.removeEventListener('abort', onAbort)
   }
 }
-module.exports = { operation }
+module.exports = { withDeadline }

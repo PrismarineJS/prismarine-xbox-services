@@ -1,10 +1,10 @@
 const { EventEmitter } = require('events')
 
-class RtaSubscription extends EventEmitter {
+class XboxRTASubscription extends EventEmitter {
   constructor (rta, uri) {
     super()
     this.uri = uri
-    this.data = undefined
+    this.initialData = undefined
     this.closed = false
     this._rta = rta
     this._id = null
@@ -24,4 +24,4 @@ class RtaSubscription extends EventEmitter {
     return this._closing
   }
 }
-module.exports = { RtaSubscription }
+module.exports = { XboxRTASubscription }

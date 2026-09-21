@@ -6,7 +6,7 @@ Xbox and PlayFab services API for Node.js.
 
 ## Usage
 
-Node.js 22 or newer is required. The API is experimental; coordinate version updates with consumers.
+Node.js 24 or newer is required. The API is experimental; coordinate version updates with consumers.
 
 ```js
 const { XboxClient } = require('prismarine-xbox-services')
@@ -22,7 +22,7 @@ dependency on prismarine-auth and accepts compatible credential providers.
 
 - [XboxClient and XboxSession](docs/xbox.md): profiles, multiplayer sessions, invitations,
   and activity publishing with caller-provided title configuration.
-- [XboxRTA](docs/rta.md): Real Time Activity connections, subscriptions and lifecycle management.
+- [XboxRTASocket](docs/rta.md): Real Time Activity connections, subscriptions and lifecycle management.
 - [PlayFabClient](docs/playfab.md): isolated authenticated PlayFab requests with caller-provided
   credentials and title ID.
 
@@ -36,7 +36,7 @@ Xbox and PlayFab integration still needs verification with title-specific creden
 
 ## Development
 
-Use Node.js 22 or newer.
+Use Node.js 24 or newer.
 
 ```sh
 git clone https://github.com/PrismarineJS/prismarine-xbox-services.git

@@ -1,5 +1,5 @@
 import { Authflow } from 'prismarine-auth'
-import { XboxClient, XboxSession, XboxRTA, PlayFabClient, ServiceError } from '..'
+import { XboxClient, XboxSession, XboxRTASocket, PlayFabClient, ServiceError, RTARequestError, SocketError, SocketClosedError, SocketNotConnectedError, SocketAlreadyConnectedError } from '..'
 
 async function example () {
   const auth = new Authflow('example')
@@ -22,9 +22,16 @@ async function example () {
   await client.getProfile({ xuid: '123', gamertag: '123' })
   // @ts-expect-error Sessions are returned by factories, not constructed directly.
   new XboxSession()
-  const rta = new XboxRTA(auth)
-  await rta.connect()
+  const rta = new XboxRTASocket(client)
+  await rta.connect().catch(error => {
+    if (error instanceof RTARequestError) console.log(error.status, error.code)
+    if (error instanceof SocketError) console.log(error.name)
+    if (error instanceof SocketClosedError || error instanceof SocketNotConnectedError || error instanceof SocketAlreadyConnectedError) console.log(error.message)
+  })
   const sub = await rta.subscribe<{ ConnectionId: string }>('https://sessiondirectory.xboxlive.com/connections/')
+  console.log(sub.initialData.ConnectionId)
+  rta.on('disconnect', (code, reason) => console.log(code, reason))
+  rta.on('close', () => console.log('closed'))
   sub.on('ready', data => console.log(data.ConnectionId))
   await sub.close()
   await rta.close()

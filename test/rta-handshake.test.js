@@ -1,27 +1,26 @@
 /* eslint-env mocha */
 const test = it
 const assert = require('node:assert/strict')
-const { EventEmitter } = require('node:events')
-const wsModule = require('ws')
-const { XboxRTA } = require('../')
+const { getEventListeners } = require('node:events')
+const { XboxClient, XboxRTASocket, SocketClosedError, SocketAlreadyConnectedError } = require('../')
 const tick = () => new Promise(resolve => setImmediate(resolve))
 
 async function withSocket (run) {
-  const Original = wsModule.WebSocket
+  const Original = global.WebSocket
   const originalFetch = global.fetch
   const sockets = []
-  class FakeSocket extends EventEmitter {
+  class FakeSocket extends EventTarget {
     static OPEN = 1
-    constructor () { super(); this.readyState = 0; this.terminated = 0; sockets.push(this) }
+    constructor () { super(); this.readyState = 0; this.closeCalls = 0; sockets.push(this) }
     send () {}
-    open () { this.readyState = 1; this.onopen?.() }
-    serverClose (code) { this.readyState = 3; this.onclose?.({ code, reason: 'server close' }) }
-    terminate () { this.terminated++; this.readyState = 3 }
+    open () { this.readyState = 1; this.dispatchEvent(new Event('open')) }
+    serverClose (code) { this.readyState = 3; this.dispatchEvent(new CloseEvent('close', { code, reason: 'server close' })) }
+    close () { this.closeCalls++; this.readyState = 3 }
   }
-  wsModule.WebSocket = FakeSocket
-  global.fetch = async () => ({ ok: true, json: async () => ({ nonce: 'nonce' }) })
-  const rta = new XboxRTA({ getXboxToken: async () => ({ userHash: 'hash', XSTSToken: 'token' }) })
-  try { await run(rta, sockets) } finally { await rta.close(); wsModule.WebSocket = Original; global.fetch = originalFetch }
+  global.WebSocket = FakeSocket
+  global.fetch = async () => new Response('{"nonce":"nonce"}')
+  const rta = new XboxRTASocket(new XboxClient({ getXboxToken: async () => ({ userHash: 'hash', XSTSToken: 'token' }) }))
+  try { await run(rta, sockets) } finally { await rta.close(); global.WebSocket = Original; global.fetch = originalFetch }
 }
 
 test('connect waits for open and removes the startup deadline after success', async () => {
@@ -31,13 +30,15 @@ test('connect waits for open and removes the startup deadline after success', as
     const connecting = rta.connect({ timeout: 30, signal: controller.signal }).then(() => { connected = true })
     await tick()
     assert.equal(connected, false)
+    await assert.rejects(rta.connect(), SocketAlreadyConnectedError)
     sockets[0].open()
     await connecting
     assert.equal(connected, true)
-    assert.equal(rta.startup, null)
+    await assert.rejects(rta.connect(), SocketAlreadyConnectedError)
+    assert.equal(rta._connectController, null)
     controller.abort()
     await new Promise(resolve => setTimeout(resolve, 40))
-    assert.equal(sockets[0].terminated, 0)
+    assert.equal(sockets[0].closeCalls, 0)
   })
 })
 
@@ -51,13 +52,12 @@ for (const action of ['timeout', 'abort', 'destroy', 'error', 'close']) {
       const socket = sockets[0]
       if (action === 'abort') controller.abort(new Error('caller cancelled'))
       if (action === 'destroy') await rta.close()
-      if (action === 'error') socket.onerror({ error: new Error('handshake failed') })
+      if (action === 'error') socket.dispatchEvent(Object.assign(new Event('error'), { error: new Error('handshake failed') }))
       if (action === 'close') socket.serverClose(1000)
       await connecting
-      assert.equal(socket.terminated, 1)
+      assert.equal(socket.closeCalls, 1)
       assert.equal(rta.ws, null)
-      assert.equal(rta.startup, null)
-      assert.equal(rta.heartbeatTimeout, null)
+      assert.equal(rta._connectController, null)
       assert.equal(rta.reconnectTimeout, null)
     })
   })
@@ -69,12 +69,10 @@ test('normal server close clears timers and pending requests and permits reconne
     await tick()
     sockets[0].open()
     await first
-    rta.heartbeat()
-    const pending = assert.rejects(rta.subscribe('test'), /closed/)
+    const pending = assert.rejects(rta.subscribe('test'), SocketClosedError)
     sockets[0].serverClose(1000)
     await pending
     assert.equal(rta.ws, null)
-    assert.equal(rta.heartbeatTimeout, null)
     assert.equal(rta.reconnectTimeout, null)
     const second = rta.connect()
     await tick()
@@ -82,7 +80,7 @@ test('normal server close clears timers and pending requests and permits reconne
     await second
     assert.equal(rta.ws, sockets[1])
     await rta.close()
-    await assert.rejects(rta.connect(), /closed/)
+    await assert.rejects(rta.connect(), SocketClosedError)
   })
 })
 
@@ -92,10 +90,29 @@ test('an older aborted startup cannot release its replacement socket', async () 
     await tick()
     const replacement = rta.reconnect()
     await tick()
+    // A callback queued by the old transport must not abort the new handshake.
+    rta.onSocketClose({ target: sockets[0], code: 1005, reason: '' })
+    rta.onSocketError({ target: sockets[0], error: new Error('stale error') })
+    let resyncs = 0
+    rta.on('resync', () => { resyncs++ })
+    rta.onSocketMessage({ target: sockets[0], data: '[4]' })
+    assert.equal(resyncs, 0)
     sockets[1].open()
     await Promise.all([first, replacement])
-    assert.equal(sockets[0].terminated, 1)
-    assert.equal(sockets[1].terminated, 0)
+    assert.equal(sockets[0].closeCalls, 1)
+    assert.equal(sockets[1].closeCalls, 0)
     assert.equal(rta.ws, sockets[1])
+    for (const event of ['error', 'close', 'message']) {
+      assert.equal(getEventListeners(sockets[0], event).length, 0)
+      assert.equal(getEventListeners(sockets[1], event).length, 1)
+    }
+    sockets[0].dispatchEvent(Object.assign(new Event('message'), { data: '[4]' }))
+    sockets[0].serverClose(1006)
+    assert.equal(resyncs, 0)
+    assert.equal(rta.ws, sockets[1])
+    await rta.close()
+    for (const event of ['error', 'close', 'message']) {
+      assert.equal(getEventListeners(sockets[1], event).length, 0)
+    }
   })
 })

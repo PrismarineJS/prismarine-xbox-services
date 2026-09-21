@@ -11,7 +11,7 @@ This experimental API revision deliberately removes compatibility aliases before
 | `session.end()` | `session.close()` |
 | `xbox.getSessions(xuid)` | `xbox.getActivityHandles(xuid)` |
 | `xbox.get/post/put/delete(url, options)` | `xbox.request(method, url, options)` |
-| RTA wire response / subscription ID | Stable subscription object with `.data`, `data` / `ready` events and `.close()` |
+| RTA wire response / subscription ID | Stable subscription object with `.initialData`, `data` / `ready` events and `.close()` |
 | `rta.destroy()` / `rta.destroy(true)` | `rta.close()` / `rta.reconnect()` |
 | PlayFab error `.error` / `.errorDetails` | `ServiceError.code` / `.details` |
 
@@ -29,4 +29,28 @@ Creation accepts an optional `name`. Both creation and joining now read the init
 available as `session.current`, and report subsequent changes through session events.
 Call `await session.setActivity()` explicitly after creation/joining when activity publication
 is desired; it is no longer automatic. Keep that call inside the consumer's cleanup scope.
-The existing XboxClient, XboxSession, XboxRTA and PlayFabClient classes remain.
+The existing XboxClient, XboxSession, XboxRTASocket and PlayFabClient classes remain.
+
+## RTA socket naming and Node version
+
+Rename `XboxRTA` imports and constructors to `XboxRTASocket`; there is no compatibility alias.
+Socket lifecycle failures now expose the error classes documented in [RTA](rta.md), so callers
+can use `instanceof` instead of matching message text. Node.js 24 or newer is required.
+
+`reconnect()` now waits for subscription restoration, not just socket opening. New subscriptions
+must wait until it resolves. Native WebSocket replaces the runtime `ws` dependency; see
+[RTA transport semantics](rta.md#native-websocket-transport) for the graceful shutdown limitation
+and removal of the unverified pong watchdog.
+
+Rename `RtaSubscription` to `XboxRTASubscription` and `subscription.data` to
+`subscription.initialData`. The property holds the response from the latest subscription
+handshake; the `data` event carries subsequent notifications. Listen for `disconnect(code,
+reason)` to observe remote connection loss. The socket's `close` event now has no arguments
+and is emitted once on terminal local shutdown, rather than on remote disconnection.
+
+Use `await socket.connect(options)` for complete setup. Internally `_connectSocket(nonce, signal)`
+opens the WebSocket and attaches class-bound event handlers; there is no separate initialization step.
+
+Construct RTA sockets with `new XboxRTASocket(xboxClient)` rather than passing an Authflow.
+The shared client owns nonce HTTP authentication and response handling; socket cancellation
+remains isolated from other work using that client.

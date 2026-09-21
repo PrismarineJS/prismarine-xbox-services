@@ -1,8 +1,8 @@
 const { randomUUID } = require('crypto')
 const { EventEmitter } = require('events')
 const { isDeepStrictEqual } = require('util')
-const { XboxRTA } = require('../rta')
-const { operation } = require('../operation')
+const { XboxRTASocket } = require('../rta')
+const { withDeadline } = require('../withDeadline')
 const debug = require('debug')('prismarine-xbox-services:session')
 
 class XboxSession extends EventEmitter {
@@ -12,14 +12,14 @@ class XboxSession extends EventEmitter {
     this.name = name
     this.state = 'opening'
     this._lifetime = new AbortController()
-    this._rta = new XboxRTA(client.authflow)
+    this._rta = new XboxRTASocket(client)
     this._membershipAttempted = false
     this._refresh = Promise.resolve()
     this._activityPublished = false
     this._pendingChange = false
     this._rta.on('resync', () => this._queueRefresh())
     this._rta.on('error', error => this._fail(error))
-    this._rta.on('close', (code, reason) => {
+    this._rta.on('disconnect', (code, reason) => {
       if (code !== 1006) this._fail(new Error(`Xbox RTA closed: ${code} ${reason}`))
     })
   }
@@ -30,7 +30,7 @@ class XboxSession extends EventEmitter {
     const session = new XboxSession(client, name ?? options.name ?? randomUUID())
     const timeout = options.timeout ?? client.options.timeout ?? 15000
     try {
-      await operation(async signal => {
+      await withDeadline(async signal => {
         const requestOptions = { signal, timeout }
         const profile = await client.getProfile('me', requestOptions)
         signal.throwIfAborted()
@@ -43,7 +43,7 @@ class XboxSession extends EventEmitter {
           else session._queueRefresh(data)
         })
         subscription.on('data', () => session._queueRefresh())
-        const connection = subscription.data.ConnectionId
+        const connection = subscription.initialData.ConnectionId
         const properties = typeof options.properties === 'function' ? await options.properties({ profile }) : options.properties
         signal.throwIfAborted()
         const payload = {
@@ -80,7 +80,7 @@ class XboxSession extends EventEmitter {
   _run (run, options) {
     if (this.state !== 'open') return Promise.reject(new Error('Xbox session is not open'))
     const timeout = options?.timeout ?? this._client.options.timeout ?? 15000
-    return operation(signal => run({ signal, timeout }), { signal: options?.signal, timeout }, this._lifetime.signal)
+    return withDeadline(signal => run({ signal, timeout }), { signal: options?.signal, timeout }, this._lifetime.signal)
   }
 
   async _write (payload, options) {

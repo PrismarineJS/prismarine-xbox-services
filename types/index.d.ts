@@ -84,23 +84,41 @@ export class XboxSession extends EventEmitter<{
   invite(identifier: UserIdentifier, options?: OperationOptions): Promise<void>
   close(): Promise<void>
 }
-export class RtaSubscription<T = unknown> extends EventEmitter {
+export class XboxRTASubscription<T = unknown> extends EventEmitter {
   private constructor()
   readonly uri: string
-  readonly data: T
+  readonly initialData: T
   readonly closed: boolean
   close(): Promise<void>
   on(event: 'ready' | 'data', listener: (data: T) => void): this
   on(event: string | symbol, listener: (...args: any[]) => void): this
 }
-export class XboxRTA extends EventEmitter {
-  constructor(authflow: XboxTokenProvider)
+export class SocketError extends Error {
+  constructor(message?: string, options?: ErrorOptions)
+}
+export class SocketClosedError extends SocketError {
+  constructor(message?: string)
+}
+export class SocketNotConnectedError extends SocketError {
+  constructor()
+}
+export class SocketAlreadyConnectedError extends SocketError {
+  constructor()
+}
+export class RTARequestError extends SocketError {
+  constructor(status: number)
+  readonly status: number
+  readonly code: string
+}
+export class XboxRTASocket extends EventEmitter {
+  constructor(client: XboxClient)
   connect(options?: OperationOptions): Promise<void>
   reconnect(): Promise<void>
-  subscribe<T = unknown>(uri: string, options?: OperationOptions): Promise<RtaSubscription<T>>
+  subscribe<T = unknown>(uri: string, options?: OperationOptions): Promise<XboxRTASubscription<T>>
   close(): Promise<void>
   on(event: 'resync', listener: () => void): this
-  on(event: 'close', listener: (code: number, reason: string) => void): this
+  on(event: 'disconnect', listener: (code: number, reason: string) => void): this
+  on(event: 'close', listener: () => void): this
   on(event: 'error', listener: (error: Error) => void): this
   on(event: string | symbol, listener: (...args: any[]) => void): this
 }
