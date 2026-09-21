@@ -1,0 +1,43 @@
+{
+  "name": "prismarine-xbox-services",
+  "version": "0.1.0",
+  "description": "Xbox and PlayFab services API for Node.js",
+  "main": "src/index.js",
+  "scripts": {
+    "test": "mocha --reporter spec --exit",
+    "pretest": "npm run lint",
+    "lint": "standard",
+    "fix": "standard --fix"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/PrismarineJS/prismarine-xbox-services.git"
+  },
+  "keywords": [
+    "xbox",
+    "playfab",
+    "minecraft",
+    "prismarine",
+    "rta"
+  ],
+  "author": "PrismarineJS",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/PrismarineJS/prismarine-xbox-services/issues"
+  },
+  "homepage": "https://github.com/PrismarineJS/prismarine-xbox-services#readme",
+  "devDependencies": {
+    "standard": "^17.0.0",
+    "mocha": "^11.1.0",
+    "prismarine-xbox-services": "file:."
+  },
+  "files": [
+    "src/",
+    "types/",
+    "docs/",
+    "HISTORY.md"
+  ],
+  "engines": {
+    "node": ">=22"
+  }
+}
