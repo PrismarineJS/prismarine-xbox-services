@@ -18,40 +18,36 @@ class JsonClient {
   constructor (options, service) {
     this.options = { ...options }
     this.service = service
-    this.requests = new Set()
+    this._pending = new AbortController()
   }
 
   async _request (method, config) {
-    const controller = new AbortController()
-    this.requests.add(controller)
-    try {
-      return await operation(async signal => {
-        const authorization = await this.getHeaders(config)
-        signal.throwIfAborted()
-        const hasBody = config.data !== undefined
-        const headers = {
-          ...authorization,
-          accept: 'application/json',
-          ...(hasBody ? { 'content-type': 'application/json' } : {}),
-          ...config.headers
-        }
-        if (config.contractVersion) headers['x-xbl-contract-version'] = config.contractVersion
-        const response = await fetch(config.url, {
-          method,
-          headers,
-          signal,
-          redirect: 'error',
-          ...(hasBody ? { body: stringify(config.data) } : {})
-        })
-        return readJsonResponse(response, this.service)
-      }, { signal: config.signal, timeout: config.timeout ?? this.options.timeout }, controller.signal)
-    } finally {
-      this.requests.delete(controller)
-    }
+    return operation(async signal => {
+      const authorization = await this.getHeaders(config)
+      signal.throwIfAborted()
+      const hasBody = config.data !== undefined
+      const headers = {
+        ...authorization,
+        accept: 'application/json',
+        ...(hasBody ? { 'content-type': 'application/json' } : {}),
+        ...config.headers
+      }
+      if (config.contractVersion) headers['x-xbl-contract-version'] = config.contractVersion
+      const response = await fetch(config.url, {
+        method,
+        headers,
+        signal,
+        redirect: 'error',
+        ...(hasBody ? { body: stringify(config.data) } : {})
+      })
+      return readJsonResponse(response, this.service)
+    }, { signal: config.signal, timeout: config.timeout ?? this.options.timeout }, this._pending.signal)
   }
 
   abortPending () {
-    for (const controller of this.requests) controller.abort(new Error(`${this.service} request cancelled`))
+    const pending = this._pending
+    this._pending = new AbortController()
+    pending.abort(new Error(`${this.service} request cancelled`))
   }
 }
 

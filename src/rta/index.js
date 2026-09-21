@@ -1,4 +1,4 @@
-// Adapted from LucienHH/xbox-rta; see licenses/xbox-rta.txt and docs/provenance.md.
+// Adapted from https://github.com/LucienHH/xbox-rta.
 const { EventEmitter } = require('events')
 const { operation } = require('../operation')
 const { RtaSubscription } = require('./subscription')

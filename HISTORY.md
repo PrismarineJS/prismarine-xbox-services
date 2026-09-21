@@ -1,3 +1,10 @@
+## Unreleased
+
+- Normalize Xbox profiles and allow caller-named sessions with explicit activity publication.
+- Add managed session snapshots and document, member and property change events.
+- Add session-ticket PlayFab title data, inventory and CloudScript helpers.
+- Simplify HTTP group cancellation and fix Node 24 CI configuration.
+
 # History
 
 ## Unreleased

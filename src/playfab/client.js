@@ -15,6 +15,22 @@ class PlayFabClient extends JsonClient {
     return { [config.auth === 'entity' ? 'X-EntityToken' : 'X-Authorization']: token }
   }
 
+  getTitleData ({ keys } = {}, options = {}) {
+    return this.request('Client/GetTitleData', { Keys: keys }, { ...options, auth: 'session' })
+  }
+
+  getUserInventory (options = {}) {
+    return this.request('Client/GetUserInventory', {}, { ...options, auth: 'session' })
+  }
+
+  executeCloudScript ({ functionName, functionParameter, generatePlayStreamEvent }, options = {}) {
+    return this.request('Client/ExecuteCloudScript', {
+      FunctionName: functionName,
+      FunctionParameter: functionParameter,
+      GeneratePlayStreamEvent: generatePlayStreamEvent
+    }, { ...options, auth: 'session' })
+  }
+
   async request (path, data = {}, options = {}) {
     // Only API paths are accepted; credentials must stay on the configured title host.
     if (!/^[A-Za-z]+\/[A-Za-z][A-Za-z0-9]*$/.test(path)) throw new TypeError('Expected a PlayFab API path such as Client/GetAccountInfo')

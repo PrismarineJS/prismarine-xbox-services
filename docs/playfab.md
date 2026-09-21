@@ -29,8 +29,28 @@ cancels this client's current requests without disabling future requests. Redire
 HTTP failures are `ServiceError` instances with `service`, `status` and raw `body`;
 PlayFab error responses also expose `code`, `errorCode`, and `details`. No requests are automatically retried.
 
-The initial surface is a generic transport. It does not claim that Minecraft needs PlayFab
-activity/heartbeat calls or implement unverified Minecraft behavior.
+Convenience methods use the same request transport and accept `{ timeout, signal }` as
+operation options:
+
+```js
+const titleData = await playfab.getTitleData({ keys: ['ServerList'] })
+const inventory = await playfab.getUserInventory()
+const result = await playfab.executeCloudScript({
+  functionName: 'SomeFunction', functionParameter: {}, generatePlayStreamEvent: false
+})
+if (result.Error) console.error(result.Error.Message)
+```
+
+All three call PlayFab **Client** endpoints using `X-Authorization` session tickets, not
+entity tokens. Responses retain PlayFab field names (`Data`, `Inventory`, `FunctionResult`,
+`Error`). A CloudScript execution error inside a successful HTTP response stays in `Error`;
+it is not an HTTP `ServiceError`. Use raw `request()` for additional service parameters.
+`getUserInventory()` is the legacy Economy API, not Economy v2. These wrappers do not imply
+that Minecraft needs activity/heartbeat calls or that these operations are enabled for every title.
+
+References: [GetTitleData](https://learn.microsoft.com/en-us/rest/api/playfab/client/title-wide-data-management/get-title-data?view=playfab-rest),
+[GetUserInventory](https://learn.microsoft.com/en-us/rest/api/playfab/client/player-item-management/get-user-inventory?view=playfab-rest),
+[ExecuteCloudScript](https://learn.microsoft.com/en-us/rest/api/playfab/client/server-side-cloud-script/execute-cloud-script?view=playfab-rest).
 
 Protocol references: Microsoft's [GetAccountInfo](https://learn.microsoft.com/en-us/rest/api/playfab/client/account-management/get-account-info?view=playfab-rest)
 documents session-ticket authentication and the

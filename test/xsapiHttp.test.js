@@ -10,6 +10,24 @@ describe('Xbox HTTP requests', () => {
   beforeEach(() => { originalFetch = global.fetch })
   afterEach(() => { global.fetch = originalFetch })
 
+  it('normalizes profile settings and preserves a large XUID', async () => {
+    global.fetch = async url => {
+      assert.equal(new URL(url).searchParams.get('settings'), 'Gamertag,GameDisplayName,GameDisplayPicRaw')
+      return new Response('{"profileUsers":[{"id":18446744073709551615,"settings":[{"id":"Gamertag","value":"Player"},{"id":"GameDisplayName","value":"Display"},{"id":"GameDisplayPicRaw","value":"https://example.com/avatar"}]}]}')
+    }
+    assert.deepStrictEqual(await new XboxClient(auth).getProfile(), {
+      xuid: '18446744073709551615', gamertag: 'Player', displayName: 'Display', avatarUrl: 'https://example.com/avatar'
+    })
+  })
+
+  it('looks up activity with just a SCID', async () => {
+    global.fetch = async (url, { body }) => {
+      assert.strictEqual(JSON.parse(body).scid, 'example')
+      return new Response('{"results":[]}')
+    }
+    assert.deepStrictEqual(await new XboxClient(auth, { scid: 'example' }).getActivityHandles('123'), [])
+  })
+
   it('accepts empty successful responses, including 204', async () => {
     for (const status of [200, 204]) {
       global.fetch = async () => new Response(null, { status })
@@ -46,7 +64,6 @@ describe('Xbox HTTP requests', () => {
     resolveToken(await auth.getXboxToken())
     await tick()
     assert.strictEqual(fetched, false)
-    assert.strictEqual(rest.requests.size, 0)
   })
 
   it('bounds response-body reading and aborts the fetch signal', async () => {
@@ -67,7 +84,25 @@ describe('Xbox HTTP requests', () => {
     await request
     global.fetch = async () => new Response(null, { status: 204 })
     await rest.updateSession('world', { members: { me: null } })
-    assert.strictEqual(rest.requests.size, 0)
+  })
+
+  it('keeps caller cancellation independent and cancels all remaining requests', async () => {
+    const signals = []
+    global.fetch = (url, { signal }) => {
+      signals.push(signal)
+      return new Promise(() => {})
+    }
+    const client = new XboxClient(auth)
+    const caller = new AbortController()
+    const first = assert.rejects(client.request('GET', 'https://example.com', { signal: caller.signal }), /caller cancelled/)
+    const remaining = [1, 2].map(() => assert.rejects(client.request('GET', 'https://example.com'), /cancelled/))
+    await tick()
+    caller.abort(new Error('caller cancelled'))
+    await first
+    assert.deepStrictEqual(signals.map(signal => signal.aborted), [true, false, false])
+    client.abortPending()
+    await Promise.all(remaining)
+    assert(signals.every(signal => signal.aborted))
   })
 
   it('honors caller cancellation before and during a request', async () => {

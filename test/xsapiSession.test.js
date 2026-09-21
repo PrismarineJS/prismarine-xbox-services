@@ -12,12 +12,13 @@ function deferred () {
 }
 
 describe('managed sessions', () => {
-  let originalFetch, connect, subscribe, requests, subscription, rta
+  let originalFetch, connect, subscribe, requests, subscription, rta, document
   beforeEach(() => {
     originalFetch = global.fetch
     connect = XboxRTA.prototype.connect
     subscribe = XboxRTA.prototype.subscribe
     requests = []
+    document = { properties: { custom: { game: 'example' } } }
     subscription = new EventEmitter()
     subscription.data = { ConnectionId: 'connection' }
     XboxRTA.prototype.connect = async function () { rta = this }
@@ -26,7 +27,7 @@ describe('managed sessions', () => {
       const body = options.body && JSON.parse(options.body)
       requests.push({ url, ...options, body })
       if (url.includes('profile.')) return new Response('{"profileUsers":[{"id":"12345"}]}')
-      if (options.method === 'GET') return new Response('{"properties":{"custom":{"game":"example"}}}')
+      if (options.method === 'GET') return new Response(JSON.stringify(document))
       return new Response(null, { status: 204 })
     }
   })
@@ -41,7 +42,7 @@ describe('managed sessions', () => {
     for (const create of [true, false]) {
       requests.length = 0
       const session = create
-        ? await client.createSession({ properties: ({ profile }) => ({ custom: { owner: profile.id } }) })
+        ? await client.createSession({ properties: ({ profile }) => ({ custom: { owner: profile.xuid } }) })
         : await client.joinSession('existing')
       assert(session instanceof XboxSession)
       assert.equal(session.state, 'open')
@@ -71,6 +72,118 @@ describe('managed sessions', () => {
     await closing
     assert.equal(requests.filter(r => r.body?.members?.me === null).length, 1)
     await assert.rejects(session.get(), /not open/)
+  })
+
+  it('uses a caller name and only publishes activity when requested, including reconnects', async () => {
+    const session = await new XboxClient(auth, title).createSession({ name: 'chosen/name' })
+    assert.equal(session.name, 'chosen/name')
+    assert(requests.some(request => request.url.endsWith('/sessions/chosen%2Fname')))
+    const activities = () => requests.filter(request => request.body?.type === 'activity').length
+    subscription.emit('ready', { ConnectionId: 'second' })
+    await session._refresh
+    assert.equal(activities(), 0)
+    await session.setActivity()
+    assert.equal(activities(), 1)
+    subscription.emit('ready', { ConnectionId: 'third' })
+    await session._refresh
+    assert.equal(activities(), 2)
+    await session.close()
+  })
+
+  it('refreshes snapshots on notifications and resync, comparing members by XUID', async () => {
+    const member = xuid => ({ constants: { system: { xuid } } })
+    document.members = { 0: member('123'), 1: member('456') }
+    const session = await new XboxClient(auth, title).joinSession('existing')
+    const changes = []; const joined = []; const left = []; const properties = []
+    session.on('changed', (next, previous) => { changes.push([next, previous]); next.properties.custom.game = 'listener mutation' })
+    session.on('memberJoin', member => joined.push(member.constants.system.xuid))
+    session.on('memberLeave', member => left.push(member.constants.system.xuid))
+    session.on('propertiesChanged', value => properties.push(value))
+    session.current.properties.custom.game = 'caller mutation'
+    assert.equal(session.current.properties.custom.game, 'example')
+    document = { members: { 8: member('123'), 9: member('789') }, properties: { custom: { game: 'changed' } } }
+    subscription.emit('data', { notification: 'opaque' })
+    await session._refresh
+    assert.equal(changes.length, 1)
+    assert.deepEqual(joined, ['789'])
+    assert.deepEqual(left, ['456'])
+    assert.equal(properties[0].custom.game, 'changed')
+    assert.equal(session.current.properties.custom.game, 'changed')
+    rta.emit('resync')
+    await session._refresh
+    assert.equal(changes.length, 1)
+    document.properties.custom.game = 'resynced'
+    rta.emit('resync')
+    await session._refresh
+    assert.equal(changes.length, 2)
+    await session.close()
+    subscription.emit('data', {})
+    await session._refresh
+    assert.equal(changes.length, 2)
+  })
+
+  it('does not lose changes or a replacement connection during the initial snapshot read', async () => {
+    const fetch = global.fetch
+    let reads = 0
+    global.fetch = async (url, options) => {
+      const response = await fetch(url, options)
+      if (url.includes('sessiondirectory.') && options.method === 'GET' && ++reads === 1) {
+        document.properties.custom.game = 'during startup'
+        subscription.emit('data', {})
+        subscription.emit('ready', { ConnectionId: 'during-read' })
+      }
+      return response
+    }
+    const session = await new XboxClient(auth, title).joinSession('existing')
+    assert.equal(session.current.properties.custom.game, 'during startup')
+    assert.equal(reads, 2)
+    assert(requests.some(request => request.body?.members?.me?.properties?.system?.connection === 'during-read'))
+    await session.close()
+  })
+
+  it('serializes refreshes and retains notifications arriving during a read', async () => {
+    const session = await new XboxClient(auth, title).joinSession('existing')
+    const fetch = global.fetch
+    const gate = deferred()
+    let reads = 0
+    global.fetch = async (url, options) => {
+      const response = await fetch(url, options)
+      if (options.method === 'GET' && ++reads === 1) await gate.promise
+      return response
+    }
+    subscription.emit('data', {})
+    await tick()
+    document.properties.custom.game = 'latest'
+    subscription.emit('data', {})
+    await tick()
+    assert.equal(reads, 1)
+    gate.resolve()
+    await session._refresh
+    assert.equal(reads, 2)
+    assert.equal(session.current.properties.custom.game, 'latest')
+    await session.close()
+  })
+
+  it('ignores a snapshot response that finishes after session closure', async () => {
+    const session = await new XboxClient(auth, title).joinSession('existing')
+    const fetch = global.fetch
+    const gate = deferred()
+    let changes = 0
+    session.on('changed', () => { changes++ })
+    document.properties.custom.game = 'too late'
+    global.fetch = async (url, options) => {
+      const response = await fetch(url, options)
+      if (options.method === 'GET') await gate.promise
+      return response
+    }
+    subscription.emit('data', {})
+    await tick()
+    await session.close()
+    gate.resolve()
+    await session._refresh
+    await tick()
+    assert.equal(changes, 0)
+    assert.equal(session.current.properties.custom.game, 'example')
   })
 
   it('does not require invitation title ID for session membership', async () => {
@@ -124,7 +237,7 @@ describe('managed sessions', () => {
     await pending
     global.fetch = fetch
     assert.equal((await second.get()).properties.custom.game, 'example')
-    assert.equal((await client.getProfile()).id, '12345')
+    assert.equal((await client.getProfile()).xuid, '12345')
     await second.close()
   })
 

@@ -29,7 +29,7 @@ dependency on prismarine-auth and accepts compatible credential providers.
 Minecraft title defaults, world metadata and game protocol behavior belong to consumers.
 The focus is services needed by Minecraft clients and bots, with reusable configuration for
 other applications. See the [migration guide](docs/migration.md), [architecture proposal](https://github.com/PrismarineJS/prismarine-auth/issues/185)
-and [source provenance](docs/provenance.md).
+and [Xbox RTA reference implementation](https://github.com/LucienHH/xbox-rta).
 
 Tests cover mocked service boundaries and local WebSocket connections. Live authenticated
 Xbox and PlayFab integration still needs verification with title-specific credentials.
@@ -50,4 +50,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution and release notes.
 
 ## License
 
-[MIT](LICENSE). Incorporated code retains its [original license notices](licenses/).
+[MIT](LICENSE).
