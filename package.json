@@ -4,10 +4,11 @@
   "description": "Xbox and PlayFab services API for Node.js",
   "main": "src/index.js",
   "scripts": {
-    "test": "mocha --reporter spec --exit",
-    "pretest": "npm run lint",
+    "test": "mocha --reporter spec",
+    "pretest": "npm run lint && npm run typecheck",
     "lint": "standard",
-    "fix": "standard --fix"
+    "fix": "standard --fix",
+    "typecheck": "tsc --noEmit --strict --target ES2022 --module commonjs --moduleResolution node test/types.ts"
   },
   "repository": {
     "type": "git",
@@ -29,15 +30,25 @@
   "devDependencies": {
     "standard": "^17.0.0",
     "mocha": "^11.1.0",
-    "prismarine-xbox-services": "file:."
+    "prismarine-xbox-services": "file:.",
+    "typescript": "^5.3.3",
+    "@types/node": "^22.0.0",
+    "prismarine-auth": "^3.1.1"
   },
   "files": [
     "src/",
     "types/",
     "docs/",
-    "HISTORY.md"
+    "HISTORY.md",
+    "licenses/"
   ],
   "engines": {
     "node": ">=22"
+  },
+  "types": "types/index.d.ts",
+  "dependencies": {
+    "debug": "^4.3.4",
+    "json-bigint": "^1.0.0",
+    "ws": "^8.18.0"
   }
 }
