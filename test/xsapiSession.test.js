@@ -20,9 +20,11 @@ describe('managed session snapshots and lifecycle', () => {
       rta = new EventEmitter()
       subscription = new EventEmitter()
       subscription.data = { ConnectionId: 'connection' }
-      rta.subscribe = async () => subscription
-      rta.close = async () => { rta.closed = true }
-      return rta
+      const connection = rta
+      const resource = subscription
+      connection.subscribe = async () => resource
+      connection.close = async () => { connection.closed = true }
+      return connection
     }
     global.fetch = async (url, options) => {
       const body = options.body && JSON.parse(options.body)
