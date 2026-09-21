@@ -11,7 +11,7 @@ This experimental API revision deliberately removes compatibility aliases before
 | `session.end()` | `session.close()` |
 | `xbox.getSessions(xuid)` | `xbox.getActivityHandles(xuid)` |
 | `xbox.get/post/put/delete(url, options)` | `xbox.request(method, url, options)` |
-| RTA wire response / subscription ID | Stable subscription object with `.data`, `data` / `ready` events and `.close()` |
+| RTA wire response / subscription ID | Stable subscription object with `.initialData`, `data` / `ready` events and `.close()` |
 | `rta.destroy()` / `rta.destroy(true)` | `rta.close()` / `rta.reconnect()` |
 | PlayFab error `.error` / `.errorDetails` | `ServiceError.code` / `.details` |
 
@@ -41,3 +41,9 @@ can use `instanceof` instead of matching message text. Node.js 24 or newer is re
 must wait until it resolves. Native WebSocket replaces the runtime `ws` dependency; see
 [RTA transport semantics](rta.md#native-websocket-transport) for the graceful shutdown limitation
 and removal of the unverified pong watchdog.
+
+Rename `RtaSubscription` to `XboxRTASubscription` and `subscription.data` to
+`subscription.initialData`. The property holds the response from the latest subscription
+handshake; the `data` event carries subsequent notifications. Listen for `disconnect(code,
+reason)` to observe remote connection loss. The socket's `close` event now has no arguments
+and is emitted once on terminal local shutdown, rather than on remote disconnection.

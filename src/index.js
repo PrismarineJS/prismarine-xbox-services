@@ -9,7 +9,7 @@ module.exports = {
   ServiceError: require('./errors').ServiceError,
   XboxClient: require('./xbox/client').XboxClient,
   XboxSession: require('./xbox/session').XboxSession,
-  RtaSubscription: require('./rta/subscription').RtaSubscription,
+  XboxRTASubscription: require('./rta/subscription').XboxRTASubscription,
   XboxRTASocket: require('./rta').XboxRTASocket,
   PlayFabClient: require('./playfab/client').PlayFabClient
 }

@@ -16,8 +16,8 @@ it('isolates matching sequence IDs between instances', async () => {
   await tick()
   second.onMessage('[1,0,0,20,{"ConnectionId":"second"}]')
   first.onMessage('[1,0,0,10,{"ConnectionId":"first"}]')
-  assert.equal((await a).data.ConnectionId, 'first')
-  assert.equal((await b).data.ConnectionId, 'second')
+  assert.equal((await a).initialData.ConnectionId, 'first')
+  assert.equal((await b).initialData.ConnectionId, 'second')
   await first.close()
   await second.close()
 })
@@ -45,7 +45,7 @@ it('closes pending subscriptions and clears connection bookkeeping', async () =>
   await tick()
   await rta.close()
   await pending
-  assert.equal(rta.promiseMap.size, 0)
+  assert.equal(rta._pendingRequests.size, 0)
   assert.equal(rta._subscriptions.size, 0)
 })
 
@@ -61,9 +61,9 @@ it('keeps subscription identity across reconnect responses and routes data to it
   assert.equal(sent[0][2], 'test/"quoted"')
   let updated
   sub.on('ready', data => { updated = data })
-  await rta.onOpen()
+  await rta._restoreSubscriptions()
   await tick()
-  assert.equal(sub.data.generation, 1)
+  assert.equal(sub.initialData.generation, 1)
   assert.equal(updated.generation, 1)
   let data
   sub.on('data', value => { data = value })
@@ -156,7 +156,7 @@ it('closing during resubscribe prevents resurrection and cleans up a late wire r
     if (type === 2) rta.onMessage(JSON.stringify([2, sequence, 0]))
   }
   const sub = await rta.subscribe('test')
-  const restoring = rta.onOpen()
+  const restoring = rta._restoreSubscriptions()
   await tick()
   await sub.close()
   await restoring

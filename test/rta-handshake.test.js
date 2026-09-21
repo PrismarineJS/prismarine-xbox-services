@@ -1,6 +1,7 @@
 /* eslint-env mocha */
 const test = it
 const assert = require('node:assert/strict')
+const { getEventListeners } = require('node:events')
 const { XboxRTASocket, SocketClosedError, SocketAlreadyConnectedError } = require('../')
 const tick = () => new Promise(resolve => setImmediate(resolve))
 
@@ -13,7 +14,7 @@ async function withSocket (run) {
     constructor () { super(); this.readyState = 0; this.closeCalls = 0; sockets.push(this) }
     send () {}
     open () { this.readyState = 1; this.dispatchEvent(new Event('open')) }
-    serverClose (code) { this.readyState = 3; this.onclose?.({ code, reason: 'server close' }) }
+    serverClose (code) { this.readyState = 3; this.dispatchEvent(new globalThis.CloseEvent('close', { code, reason: 'server close' })) }
     close () { this.closeCalls++; this.readyState = 3 }
   }
   global.WebSocket = FakeSocket
@@ -34,7 +35,7 @@ test('connect waits for open and removes the startup deadline after success', as
     await connecting
     assert.equal(connected, true)
     await assert.rejects(rta.connect(), SocketAlreadyConnectedError)
-    assert.equal(rta.startup, null)
+    assert.equal(rta._connectController, null)
     controller.abort()
     await new Promise(resolve => setTimeout(resolve, 40))
     assert.equal(sockets[0].closeCalls, 0)
@@ -51,12 +52,12 @@ for (const action of ['timeout', 'abort', 'destroy', 'error', 'close']) {
       const socket = sockets[0]
       if (action === 'abort') controller.abort(new Error('caller cancelled'))
       if (action === 'destroy') await rta.close()
-      if (action === 'error') socket.onerror({ error: new Error('handshake failed') })
+      if (action === 'error') socket.dispatchEvent(Object.assign(new Event('error'), { error: new Error('handshake failed') }))
       if (action === 'close') socket.serverClose(1000)
       await connecting
       assert.equal(socket.closeCalls, 1)
       assert.equal(rta.ws, null)
-      assert.equal(rta.startup, null)
+      assert.equal(rta._connectController, null)
       assert.equal(rta.reconnectTimeout, null)
     })
   })
@@ -94,5 +95,19 @@ test('an older aborted startup cannot release its replacement socket', async () 
     assert.equal(sockets[0].closeCalls, 1)
     assert.equal(sockets[1].closeCalls, 0)
     assert.equal(rta.ws, sockets[1])
+    for (const event of ['error', 'close', 'message']) {
+      assert.equal(getEventListeners(sockets[0], event).length, 0)
+      assert.equal(getEventListeners(sockets[1], event).length, 1)
+    }
+    let resyncs = 0
+    rta.on('resync', () => { resyncs++ })
+    sockets[0].dispatchEvent(Object.assign(new Event('message'), { data: '[4]' }))
+    sockets[0].serverClose(1006)
+    assert.equal(resyncs, 0)
+    assert.equal(rta.ws, sockets[1])
+    await rta.close()
+    for (const event of ['error', 'close', 'message']) {
+      assert.equal(getEventListeners(sockets[1], event).length, 0)
+    }
   })
 })

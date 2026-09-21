@@ -20,7 +20,7 @@ describe('managed sessions', () => {
     requests = []
     document = { properties: { custom: { game: 'example' } } }
     subscription = new EventEmitter()
-    subscription.data = { ConnectionId: 'connection' }
+    subscription.initialData = { ConnectionId: 'connection' }
     XboxRTASocket.prototype.connect = async function () { rta = this }
     XboxRTASocket.prototype.subscribe = async () => subscription
     global.fetch = async (url, options) => {
@@ -247,7 +247,7 @@ describe('managed sessions', () => {
     await tick()
     assert(requests.some(r => r.body?.members?.me?.properties?.system?.connection === 'replacement'))
     const failure = new Promise(resolve => session.once('error', resolve))
-    rta.onClose(1000, 'shutdown')
+    rta._onDisconnect(1000, 'shutdown')
     assert.match((await failure).message, /shutdown/)
     assert.equal(session.state, 'closed')
   })

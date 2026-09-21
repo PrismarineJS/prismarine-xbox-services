@@ -8,7 +8,7 @@ rta.on('resync', refreshAuthoritativeState)
 try {
   await rta.connect({ timeout: 15000, signal })
   const subscription = await rta.subscribe('https://sessiondirectory.xboxlive.com/connections/')
-  console.log(subscription.data)
+  console.log(subscription.initialData)
   subscription.on('data', handleNotification)
   subscription.on('ready', handleReplacementConnection)
   // Keep consuming notifications for as long as needed.
@@ -18,24 +18,27 @@ try {
 }
 ```
 
-- `connect({ timeout = 15000, signal } = {})` resolves once the WebSocket opens. Its deadline
+- `connect({ timeout = 15000, signal } = {})` resolves once the WebSocket opens and existing subscriptions are restored. Its deadline
   covers credentials, nonce retrieval, handshake and restoration of existing subscriptions. The signal applies only to startup.
-- `subscribe(uri, { timeout = 30000, signal } = {})` returns a stable RtaSubscription.
+- `subscribe(uri, { timeout = 30000, signal } = {})` returns a stable XboxRTASubscription.
   Await connection first; disconnected requests reject instead of accumulating in a queue.
-- `subscription.data` contains the latest subscription response. `data` events carry change
+- `subscription.initialData` contains the response from the latest successful subscription handshake,
+  replaced on reconnect rather than updated by notification events. `data` events carry change
   notifications; `ready` events report subsequent subscription responses after reconnect.
 - Subscription identity and listeners survive reconnects. Wire IDs and sequence numbers are internal.
 - `subscription.close()` is idempotent, removes local listeners from routing, and unsubscribes
   remotely when connected. It rejects if that remote request fails; the local subscription
   remains closed. A disconnected subscription is removed from future restoration.
-- `close()` shuts down the connection and all its subscriptions. It is terminal and idempotent.
+- `close()` shuts down the connection and all its subscriptions. It is terminal and idempotent, emitting `close()` once after local cleanup.
 - `reconnect()` explicitly replaces the connection and starts restoring subscriptions. Its
   promise resolves after all remaining subscriptions are restored; each subscription emits `ready`.
   Restoration shares the connection deadline configured by `connect()`. A restoration failure
   rejects reconnect and releases the replacement connection. New subscriptions must wait for
   connect/reconnect to finish.
 
-Normal server closure emits `close(code, reason)` and permits later explicit connect/reconnect.
+Closure of an established remote connection emits `disconnect(code, reason)`. Normal closure permits later
+explicit connect/reconnect. Local close/reconnect does not emit `disconnect`; `close` is
+reserved for the terminal `socket.close()` operation, even if never connected.
 Abnormal close (1006) and 90-minute renewal initiate reconnection. Failed
 background reconnect/restoration emits `error`; there is no unbounded retry loop. A `resync`
 event tells callers to refresh authoritative service state.

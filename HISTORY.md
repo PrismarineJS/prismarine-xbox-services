@@ -1,5 +1,8 @@
 ## Unreleased
 
+- Rename XboxRTASubscription and its initialData property; distinguish disconnect from terminal close.
+- Scope native socket listeners to each connection and clarify internal operation names.
+
 - Use native WebSocket, retain ws only for tests, and remove the unverified pong watchdog.
 - Await subscription restoration on reconnect and expose structured RTA request/nonce failures.
 

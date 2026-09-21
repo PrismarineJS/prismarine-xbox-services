@@ -3,7 +3,7 @@ const assert = require('assert/strict')
 const { once } = require('events')
 const { createServer } = require('http')
 const { WebSocketServer } = require('ws')
-const { XboxRTASocket, SocketClosedError, RTARequestError, ServiceError } = require('..')
+const { XboxRTASocket, XboxRTASubscription, SocketClosedError, RTARequestError, ServiceError } = require('..')
 const tick = () => new Promise(resolve => setImmediate(resolve))
 const auth = { getXboxToken: async () => ({ userHash: 'hash', XSTSToken: 'token' }) }
 
@@ -51,10 +51,12 @@ it('restores native WebSocket subscriptions before reconnect resolves', async ()
     })
     await rta.connect()
     const subscription = await rta.subscribe('https://sessiondirectory.xboxlive.com/connections/')
-    assert.equal(subscription.data.ConnectionId, 'local-42')
+    assert(subscription instanceof XboxRTASubscription)
+    assert.equal(subscription.initialData.ConnectionId, 'local-42')
     const event = once(subscription, 'data')
     connections[0].send('[3,42,{"changed":true}]')
     assert.equal((await event)[0].changed, true)
+    assert.equal(subscription.initialData.ConnectionId, 'local-42')
     const secondConnection = once(server, 'connection')
     let restored = false
     const reconnecting = rta.reconnect().then(() => { restored = true })
@@ -63,7 +65,7 @@ it('restores native WebSocket subscriptions before reconnect resolves', async ()
     assert.equal(restored, false)
     acknowledge()
     await reconnecting
-    assert.equal(subscription.data.ConnectionId, 'local-43')
+    assert.equal(subscription.initialData.ConnectionId, 'local-43')
     const nextEvent = once(subscription, 'data')
     peer.send('[3,43,{"changed":"after reconnect"}]')
     assert.equal((await nextEvent)[0].changed, 'after reconnect')
@@ -87,7 +89,7 @@ it('automatically answers server pings and releases local work when the peer sta
     await rta.close()
     await pending
     assert.equal(rta.ws, null)
-    assert.equal(rta.promiseMap.size, 0)
+    assert.equal(rta._pendingRequests.size, 0)
     assert.equal(socket.readyState, global.WebSocket.CLOSING)
     peer.terminate() // Native WebSocket has no public force-close operation.
     await once(socket, 'close')
@@ -112,7 +114,7 @@ for (const failure of ['timeout', 'status']) {
       await rta.subscribe('test')
       await assert.rejects(rta.reconnect(), failure === 'status' ? RTARequestError : /timed out/)
       assert.equal(rta.ws, null)
-      assert.equal(rta.startup, null)
+      assert.equal(rta._connectController, null)
       assert.equal(rta.reconnectTimeout, null)
       assert.equal(errors, 0)
     })
@@ -170,4 +172,24 @@ it('reports nonce HTTP failures with structured service errors', async () => {
     await rta.close()
     global.fetch = originalFetch
   }
+})
+
+it('distinguishes remote disconnection from idempotent terminal closure', async () => {
+  await withServer(async (rta, server) => {
+    let closes = 0
+    rta.on('close', () => { closes++ })
+    const connected = once(server, 'connection')
+    await rta.connect()
+    const [peer] = await connected
+    const disconnected = once(rta, 'disconnect')
+    peer.close(1000, 'server restart')
+    assert.deepEqual(await disconnected, [1000, 'server restart'])
+    assert.equal(closes, 0)
+    assert.equal(rta.closed, false)
+    await rta.connect()
+    await rta.close()
+    await rta.close()
+    assert.equal(closes, 1)
+    assert.equal(rta.closed, true)
+  })
 })

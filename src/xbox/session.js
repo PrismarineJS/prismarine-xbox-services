@@ -19,7 +19,7 @@ class XboxSession extends EventEmitter {
     this._pendingChange = false
     this._rta.on('resync', () => this._queueRefresh())
     this._rta.on('error', error => this._fail(error))
-    this._rta.on('close', (code, reason) => {
+    this._rta.on('disconnect', (code, reason) => {
       if (code !== 1006) this._fail(new Error(`Xbox RTA closed: ${code} ${reason}`))
     })
   }
@@ -43,7 +43,7 @@ class XboxSession extends EventEmitter {
           else session._queueRefresh(data)
         })
         subscription.on('data', () => session._queueRefresh())
-        const connection = subscription.data.ConnectionId
+        const connection = subscription.initialData.ConnectionId
         const properties = typeof options.properties === 'function' ? await options.properties({ profile }) : options.properties
         signal.throwIfAborted()
         const payload = {
