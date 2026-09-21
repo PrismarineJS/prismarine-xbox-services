@@ -42,4 +42,4 @@ failures still emit `error`, so callers need both an error listener and promise 
 Authentication refresh decisions stay with the credential provider.
 
 Diagnostics: `DEBUG=prismarine-xbox-services:rta`. Public members are documented above;
-transport state and maps are implementation details. See [provenance](provenance.md).
+transport state and maps are implementation details. 
