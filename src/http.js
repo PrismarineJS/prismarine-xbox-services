@@ -1,59 +1,17 @@
+const { operation } = require('./operation')
+const { ServiceError } = require('./errors')
 const { parse, stringify } = require('json-bigint')({ storeAsString: true })
 
 async function readJsonResponse (response, service = 'HTTP') {
   const body = await response.text()
   if (!response.ok) {
-    const error = new Error(`${service} HTTP ${response.status} ${response.statusText}: ${body}`)
-    error.status = response.status
-    error.body = body
-    throw error
+    let details
+    if (service === 'PlayFab') {
+      try { details = JSON.parse(body) } catch {}
+    }
+    throw new ServiceError(service, response.status, body, details)
   }
   return body.trim() ? parse(body) : undefined
-}
-
-// The deadline covers authentication, HTTP headers, and the response body.
-// Racing cancellation also bounds auth flows that cannot themselves be aborted.
-async function requestJson (getHeaders, method, config, controller, timeout = 15000, service = 'HTTP') {
-  const signal = controller.signal
-  const abort = () => controller.abort(config.signal.reason)
-  if (config.signal?.aborted) abort()
-  else config.signal?.addEventListener('abort', abort, { once: true })
-  const timer = setTimeout(() => controller.abort(new Error(`${service} request timed out`)), config.timeout ?? timeout)
-  let onAbort
-  const cancelled = new Promise((resolve, reject) => {
-    onAbort = () => reject(signal.reason)
-    if (signal.aborted) onAbort()
-    else signal.addEventListener('abort', onAbort, { once: true })
-  })
-  const execute = async () => {
-    signal.throwIfAborted()
-    const authorization = await getHeaders()
-    signal.throwIfAborted()
-    const hasBody = config.data !== undefined
-    const headers = {
-      ...authorization,
-      accept: 'application/json',
-      'accept-language': 'en-US',
-      ...(hasBody ? { 'content-type': 'application/json' } : {}),
-      ...config.headers
-    }
-    if (config.contractVersion) headers['x-xbl-contract-version'] = config.contractVersion
-    const response = await fetch(config.url, {
-      method,
-      headers,
-      signal,
-      redirect: 'error',
-      ...(hasBody ? { body: stringify(config.data) } : {})
-    })
-    return readJsonResponse(response, service)
-  }
-  try {
-    return await Promise.race([execute(), cancelled])
-  } finally {
-    clearTimeout(timer)
-    signal.removeEventListener('abort', onAbort)
-    config.signal?.removeEventListener('abort', abort)
-  }
 }
 
 class JsonClient {
@@ -67,7 +25,26 @@ class JsonClient {
     const controller = new AbortController()
     this.requests.add(controller)
     try {
-      return await requestJson(() => this.getHeaders(config), method, config, controller, this.options.timeout, this.service)
+      return await operation(async signal => {
+        const authorization = await this.getHeaders(config)
+        signal.throwIfAborted()
+        const hasBody = config.data !== undefined
+        const headers = {
+          ...authorization,
+          accept: 'application/json',
+          ...(hasBody ? { 'content-type': 'application/json' } : {}),
+          ...config.headers
+        }
+        if (config.contractVersion) headers['x-xbl-contract-version'] = config.contractVersion
+        const response = await fetch(config.url, {
+          method,
+          headers,
+          signal,
+          redirect: 'error',
+          ...(hasBody ? { body: stringify(config.data) } : {})
+        })
+        return readJsonResponse(response, this.service)
+      }, { signal: config.signal, timeout: config.timeout ?? this.options.timeout }, controller.signal)
     } finally {
       this.requests.delete(controller)
     }

@@ -19,28 +19,14 @@ class PlayFabClient extends JsonClient {
     // Only API paths are accepted; credentials must stay on the configured title host.
     if (!/^[A-Za-z]+\/[A-Za-z][A-Za-z0-9]*$/.test(path)) throw new TypeError('Expected a PlayFab API path such as Client/GetAccountInfo')
     if (options.auth !== undefined && !['session', 'entity'].includes(options.auth)) throw new TypeError('Unknown PlayFab authentication type')
-    try {
-      const response = await this._request('POST', {
-        timeout: options.timeout,
-        signal: options.signal,
-        auth: options.auth,
-        url: `https://${this.options.titleId}.playfabapi.com/${path}`,
-        data
-      })
-      return response?.data
-    } catch (error) {
-      if (error.body) {
-        let details
-        try { details = JSON.parse(error.body) } catch {}
-        if (details?.error) {
-          error.message = `PlayFab ${details.error}: ${details.errorMessage || ''}`
-          error.error = details.error
-          error.errorCode = details.errorCode
-          error.errorDetails = details.errorDetails
-        }
-      }
-      throw error
-    }
+    const response = await this._request('POST', {
+      timeout: options.timeout,
+      signal: options.signal,
+      auth: options.auth,
+      url: `https://${this.options.titleId}.playfabapi.com/${path}`,
+      data
+    })
+    return response?.data
   }
 }
 

@@ -1,5 +1,13 @@
 # History
 
+## Unreleased
+
+- Replace SessionDirectory with ready XboxSession factories, explicit identities, and close().
+- Return stable RTA subscriptions and separate request failures from background errors.
+- Share operation deadlines and give managed sessions independent cancellation and bounded cleanup.
+- Remove redundant session property writes and forced token refresh on RTA connection.
+- Add ServiceError, consistent request options, and an API migration guide.
+
 ## 0.1.0
 
 - Extract Xbox HTTP and managed-session clients with generic title configuration.

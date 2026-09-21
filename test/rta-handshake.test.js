@@ -21,7 +21,7 @@ async function withSocket (run) {
   wsModule.WebSocket = FakeSocket
   global.fetch = async () => ({ ok: true, json: async () => ({ nonce: 'nonce' }) })
   const rta = new XboxRTA({ getXboxToken: async () => ({ userHash: 'hash', XSTSToken: 'token' }) })
-  try { await run(rta, sockets) } finally { await rta.destroy(); wsModule.WebSocket = Original; global.fetch = originalFetch }
+  try { await run(rta, sockets) } finally { await rta.close(); wsModule.WebSocket = Original; global.fetch = originalFetch }
 }
 
 test('connect waits for open and removes the startup deadline after success', async () => {
@@ -50,7 +50,7 @@ for (const action of ['timeout', 'abort', 'destroy', 'error', 'close']) {
       assert.equal(sockets.length, 1)
       const socket = sockets[0]
       if (action === 'abort') controller.abort(new Error('caller cancelled'))
-      if (action === 'destroy') await rta.destroy()
+      if (action === 'destroy') await rta.close()
       if (action === 'error') socket.onerror({ error: new Error('handshake failed') })
       if (action === 'close') socket.serverClose(1000)
       await connecting
@@ -81,16 +81,16 @@ test('normal server close clears timers and pending requests and permits reconne
     sockets[1].open()
     await second
     assert.equal(rta.ws, sockets[1])
-    await rta.destroy()
+    await rta.close()
     await assert.rejects(rta.connect(), /closed/)
   })
 })
 
 test('an older aborted startup cannot release its replacement socket', async () => {
   await withSocket(async (rta, sockets) => {
-    const first = assert.rejects(rta.connect(), /closed/)
+    const first = assert.rejects(rta.connect(), /reconnecting/)
     await tick()
-    const replacement = rta.destroy(true)
+    const replacement = rta.reconnect()
     await tick()
     sockets[1].open()
     await Promise.all([first, replacement])

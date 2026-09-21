@@ -1,177 +1,141 @@
-const { randomUUID: v4 } = require('crypto')
+const { randomUUID } = require('crypto')
 const { EventEmitter } = require('events')
 const { XboxRTA } = require('../rta')
-const { XboxClient, isXuid } = require('./client')
-
+const { operation } = require('../operation')
 const debug = require('debug')('prismarine-xbox-services:session')
 
-class SessionDirectory extends EventEmitter {
-  constructor (authflow, options = {}) {
+class XboxSession extends EventEmitter {
+  constructor (client, name) {
     super()
-    for (const field of ['titleId', 'scid', 'templateName']) {
-      if (!options[field]) throw new TypeError(`Xbox session requires ${field}`)
-    }
-    this.options = { ...options }
-    this.authflow = authflow
-    this.client = new XboxClient(authflow, this.options)
-    this.subscriptionId = v4()
-    this.name = ''
-    this.profile = null
-    this.connectionId = null
-    this.rta = null
-    this._started = false
-    this._ended = false
-    this._ready = false
-  }
-
-  assertActive () {
-    if (this._ended) throw new Error('Xbox session is closed')
-  }
-
-  start (name) {
-    this.assertActive()
-    if (this._started) throw new Error('Xbox session already started; create a new SessionDirectory')
-    this._started = true
+    this._client = client
     this.name = name
-  }
-
-  async connect () {
-    this.rta = new XboxRTA(this.authflow)
-    // Attach before connect/subscribe: the dependency emits errors as well as rejecting requests.
-    this.rta.on('error', error => { this.fail(error) })
-    this.rta.on('close', (code, reason) => {
-      if (code !== 1006) this.fail(new Error(`Xbox RTA closed: ${code} ${reason}`))
+    this.state = 'opening'
+    this._lifetime = new AbortController()
+    this._rta = new XboxRTA(client.authflow)
+    this._membershipAttempted = false
+    this._refresh = Promise.resolve()
+    this._rta.on('error', error => this._fail(error))
+    this._rta.on('close', (code, reason) => {
+      if (code !== 1006) this._fail(new Error(`Xbox RTA closed: ${code} ${reason}`))
     })
-    this.rta.on('subscribe', event => {
-      // Initial subscription is consumed by the awaited subscribe() below.
-      if (this._ready) this.onSubscribe(event).catch(error => this.fail(error))
-    })
-    this.profile = await this.client.getProfile('me')
-    this.assertActive()
-    await this.rta.connect({ timeout: this.options.timeout })
-    this.assertActive()
-    const response = await this.rta.subscribe('https://sessiondirectory.xboxlive.com/connections/')
-    this.assertActive()
-    this.connectionId = response.data.ConnectionId
   }
 
-  fail (error) {
-    if (this._ended) return
-    const closing = this.end()
-    // Startup errors belong to the rejected create/join promise. Established sessions emit.
-    if (this._ready) {
-      closing.then(() => this.emit('error', error), cleanupError => this.emit('error', cleanupError))
-        .catch(error => { debug('Session error listener failed: %s', error.message) })
-    } else {
-      closing.catch(error => { debug('Session cleanup failed: %s', error.message) })
-    }
-  }
-
-  async onSubscribe (event) {
-    if (this._ended) return
-    const connectionId = event.data?.ConnectionId
-    if (typeof connectionId !== 'string') return
-    this.connectionId = connectionId
+  static async open (client, name, options) {
+    // Each session owns its lifetime signal; the HTTP client can be shared.
+    client._sessionRef(name || '')
+    const session = new XboxSession(client, name || randomUUID())
+    const timeout = options.timeout ?? client.options.timeout ?? 15000
     try {
-      await this.updateSession({ members: { me: { properties: { system: { active: true, connection: connectionId } } } } })
-      this.assertActive()
-      await this.client.setActivity(this.name)
-    } catch (cause) {
-      this.fail(new Error('Xbox session connection was lost', { cause }))
-    }
-  }
-
-  async joinSession (name) {
-    this.start(name)
-    try {
-      await this.connect()
-      this.assertActive()
-      await this.client.addConnection(this.name, this.profile.id, this.connectionId, this.subscriptionId)
-      await this.checkCompletion()
-      await this.client.setActivity(this.name)
-      this.assertActive()
-      const session = await this.getSession()
-      this.assertActive()
-      this._ready = true
-      return session
-    } catch (error) {
-      await this.end()
-      throw error
-    }
-  }
-
-  async createSession (properties = {}) {
-    this.start(v4())
-    try {
-      await this.connect()
-      this.assertActive()
-      const resolved = typeof properties === 'function' ? properties({ profile: this.profile }) : properties
-      await this.updateSession({
-        properties: resolved,
-        members: {
-          me: {
-            constants: { system: { xuid: this.profile.id, initialize: true } },
-            properties: {
-              system: { active: true, connection: this.connectionId, subscription: { id: this.subscriptionId, changeTypes: ['everything'] } }
+      await operation(async signal => {
+        const requestOptions = { signal, timeout }
+        const profile = await client.getProfile('me', requestOptions)
+        signal.throwIfAborted()
+        await session._rta.connect(requestOptions)
+        const subscription = await session._rta.subscribe('https://sessiondirectory.xboxlive.com/connections/', requestOptions)
+        signal.throwIfAborted()
+        // Queue refreshes even during startup so a reconnect cannot lose its new connection ID.
+        subscription.on('ready', data => {
+          if (session.state === 'opening') session._pendingConnection = data
+          else session._queueRefresh(data)
+        })
+        const connection = subscription.data.ConnectionId
+        const properties = typeof options.properties === 'function' ? await options.properties({ profile }) : options.properties
+        signal.throwIfAborted()
+        const payload = {
+          members: {
+            me: {
+              constants: { system: { xuid: profile.id, initialize: true } },
+              properties: { system: { active: true, connection, subscription: { id: randomUUID(), changeTypes: ['everything'] } } }
             }
           }
         }
-      })
-      this.assertActive()
-      await this.client.setActivity(this.name)
-      this.assertActive()
-      const session = await this.getSession()
-      await this.updateSession({ properties: session.properties })
-      this._ready = true
+        if (name === null) payload.properties = properties || {}
+        session._membershipAttempted = true
+        await session._write(payload, requestOptions)
+        await client.setActivity(session.name, requestOptions)
+        signal.throwIfAborted()
+        while (session._pendingConnection) {
+          const data = session._pendingConnection
+          session._pendingConnection = null
+          await session._updateConnection(data, requestOptions)
+        }
+        signal.throwIfAborted()
+        session.state = 'open'
+      }, { signal: options.signal, timeout }, session._lifetime.signal)
+      return session
     } catch (error) {
-      await this.end()
+      await session.close()
       throw error
     }
   }
 
-  end () {
-    if (this._endPromise) return this._endPromise
-    this._ended = true
-    this.client.abortPending()
-    this._endPromise = this.closeSession()
-    return this._endPromise
+  _run (run, options) {
+    if (this.state !== 'open') return Promise.reject(new Error('Xbox session is not open'))
+    const timeout = options?.timeout ?? this._client.options.timeout ?? 15000
+    return operation(signal => run({ signal, timeout }), { signal: options?.signal, timeout }, this._lifetime.signal)
   }
 
-  async closeSession () {
-    try {
-      await this.rta?.destroy()
-    } finally {
-      if (this.name) {
-        await this.client.leaveSession(this.name)
-          .catch(error => { debug('Failed to leave session %s: %s', this.name, error.message) })
-      }
-    }
+  async _write (payload, options) {
+    await this._client.updateSession(this.name, payload, options)
+    if (this._lifetime.signal.aborted) await this._leave()
+    options.signal.throwIfAborted()
   }
 
-  async invitePlayer (identifier) {
-    this.assertActive()
-    if (!isXuid(identifier)) identifier = (await this.client.getProfile(identifier)).id
-    this.assertActive()
-    await this.client.sendInvite(this.name, identifier)
+  get (options) {
+    return this._run(requestOptions => this._client.getSession(this.name, requestOptions), options)
   }
 
-  async getSession () {
-    this.assertActive()
-    return this.client.getSession(this.name)
+  updateProperties (properties, options) {
+    return this._run(requestOptions => this._write({ properties }, requestOptions), options)
   }
 
-  async checkCompletion () {
-    if (this._ended) {
-      await this.client.leaveSession(this.name)
-      this.assertActive()
-    }
+  invite (identifier, options) {
+    return this._run(async requestOptions => {
+      const xuid = typeof identifier?.xuid === 'string' && /^\d+$/.test(identifier.xuid) && identifier.gamertag === undefined
+        ? identifier.xuid
+        : (await this._client.getProfile(identifier, requestOptions)).id
+      requestOptions.signal.throwIfAborted()
+      await this._client.sendInvite(this.name, xuid, requestOptions)
+    }, options)
   }
 
-  async updateSession (payload) {
-    this.assertActive()
-    await this.client.updateSession(this.name, payload)
-    await this.checkCompletion()
+  async _updateConnection (data, options) {
+    await this._write({ members: { me: { properties: { system: { active: true, connection: data.ConnectionId } } } } }, options)
+    await this._client.setActivity(this.name, options)
+  }
+
+  _queueRefresh (data) {
+    this._refresh = this._refresh.then(async () => {
+      if (this.state !== 'open') return
+      await this._run(options => this._updateConnection(data, options))
+    }).catch(error => this._fail(error))
+  }
+
+  _fail (error) {
+    if (this.state === 'closing' || this.state === 'closed') return
+    const established = this.state === 'open'
+    this._lifetime.abort(error)
+    this.close().then(() => {
+      // Emission is outside the cleanup promise; application listener exceptions are not swallowed.
+      if (established) queueMicrotask(() => this.emit('error', error))
+    })
+  }
+
+  async _leave () {
+    await this._client.updateSession(this.name, { members: { me: null } }, { timeout: this._client.options.cleanupTimeout ?? 5000 })
+      .catch(error => { debug('Failed to leave session %s: %s', this.name, error.message) })
+  }
+
+  close () {
+    if (this._closing) return this._closing
+    this.state = 'closing'
+    this._lifetime.abort(new Error('Xbox session is closed'))
+    this._closing = (async () => {
+      await this._rta.close()
+      if (this._membershipAttempted) await this._leave()
+      this.state = 'closed'
+    })()
+    return this._closing
   }
 }
-
-module.exports = { SessionDirectory }
+module.exports = { XboxSession }

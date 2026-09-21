@@ -26,8 +26,8 @@ belong to the configured title. No title secret keys or admin/server APIs are pr
 
 The shared request deadline covers credentials, HTTP headers and body reading. `abortPending()`
 cancels this client's current requests without disabling future requests. Redirects are rejected.
-HTTP errors expose `status` and raw `body`; PlayFab error responses also expose `error`,
-`errorCode`, and `errorDetails`. No requests are automatically retried.
+HTTP failures are `ServiceError` instances with `service`, `status` and raw `body`;
+PlayFab error responses also expose `code`, `errorCode`, and `details`. No requests are automatically retried.
 
 The initial surface is a generic transport. It does not claim that Minecraft needs PlayFab
 activity/heartbeat calls or implement unverified Minecraft behavior.

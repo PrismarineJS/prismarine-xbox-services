@@ -1,7 +1,6 @@
 /* eslint-env mocha */
-const test = it
-const assert = require('node:assert/strict')
-const { XboxRTA } = require('../')
+const assert = require('assert/strict')
+const { XboxRTA } = require('..')
 const tick = () => new Promise(resolve => setImmediate(resolve))
 function ready () {
   const rta = new XboxRTA({})
@@ -9,136 +8,146 @@ function ready () {
   return rta
 }
 
-test('isolates matching sequence IDs between instances and removes completed requests', async () => {
+it('isolates matching sequence IDs between instances', async () => {
   const first = ready()
   const second = ready()
   const a = first.subscribe('first')
   const b = second.subscribe('second')
+  await tick()
   second.onMessage('[1,0,0,20,{"ConnectionId":"second"}]')
   first.onMessage('[1,0,0,10,{"ConnectionId":"first"}]')
   assert.equal((await a).data.ConnectionId, 'first')
   assert.equal((await b).data.ConnectionId, 'second')
-  assert.equal(first.promiseMap.size, 0)
-  assert.equal(second.promiseMap.size, 0)
-  await first.destroy()
-  await second.destroy()
+  await first.close()
+  await second.close()
 })
 
-test('registers pending responses before sending', async () => {
-  const rta = ready()
-  rta.ws.send = () => rta.onMessage('[1,0,0,10,{}]')
-  await rta.subscribe('test')
-  await rta.destroy()
-})
-
-test('destroy rejects pending subscriptions and empties queued work', async () => {
+it('rejects requests made before connecting rather than silently queuing', async () => {
   const rta = new XboxRTA({})
+  await assert.rejects(rta.subscribe('test'), /not connected/)
+  assert.equal(rta._subscriptions.size, 0)
+  await rta.close()
+})
+
+it('closes pending subscriptions and clears connection bookkeeping', async () => {
+  const rta = ready()
   const pending = assert.rejects(rta.subscribe('test'), /closed/)
-  await rta.destroy()
+  await tick()
+  await rta.close()
   await pending
   assert.equal(rta.promiseMap.size, 0)
-  assert.deepEqual(rta.queue, [])
+  assert.equal(rta._subscriptions.size, 0)
 })
 
-test('deadline and destruction stop waiting for auth and prevent late fetches', async () => {
+it('keeps subscription identity across reconnect responses and routes data to it', async () => {
+  const rta = ready()
+  const sent = []
+  rta.ws.send = raw => {
+    const [type, sequenceId, payload] = JSON.parse(raw)
+    sent.push([type, sequenceId, payload])
+    rta.onMessage(JSON.stringify(type === 1 ? [1, sequenceId, 0, sequenceId + 40, { generation: sequenceId }] : [2, sequenceId, 0]))
+  }
+  const sub = await rta.subscribe('test/"quoted"')
+  assert.equal(sent[0][2], 'test/"quoted"')
+  let updated
+  sub.on('ready', data => { updated = data })
+  rta.onOpen()
+  await tick()
+  assert.equal(sub.data.generation, 1)
+  assert.equal(updated.generation, 1)
+  let data
+  sub.on('data', value => { data = value })
+  rta.onMessage('[3,41,{"changed":true}]')
+  assert.equal(data.changed, true)
+  await sub.close()
+  assert.deepEqual(sent.at(-1), [2, 2, 41])
+  assert.equal(rta._subscriptions.size, 0)
+  await rta.close()
+})
+
+it('rejects subscription failures without also emitting an error', async () => {
+  const rta = ready()
+  rta.ws.send = () => rta.onMessage('[1,0,1001]')
+  // No error listener is necessary for an awaited request rejection.
+  await assert.rejects(rta.subscribe('test'), /Throttled/)
+  assert.equal(rta._subscriptions.size, 0)
+  await rta.close()
+})
+
+it('cancels pending subscribe and unsubscribes a late successful response', async () => {
+  const rta = ready()
+  const sent = []
+  rta.ws.send = raw => {
+    const message = JSON.parse(raw)
+    sent.push(message)
+    if (message[0] === 2) rta.onMessage(JSON.stringify([2, message[1], 0]))
+  }
+  const controller = new AbortController()
+  const pending = assert.rejects(rta.subscribe('test', { signal: controller.signal }), /cancelled/)
+  await tick()
+  controller.abort(new Error('cancelled'))
+  await pending
+  rta.onMessage('[1,0,0,42,{}]')
+  await tick()
+  assert.deepEqual(sent.at(-1), [2, 1, 42])
+  assert.equal(rta._subscriptions.size, 0)
+  await rta.close()
+})
+
+it('bounds authentication and prevents late requests without forcing token refresh', async () => {
   const originalFetch = global.fetch
   try {
     for (const cancel of [false, true]) {
       let resolveToken
-      let fetched = false
-      global.fetch = async () => { fetched = true; throw new Error('late request') }
-      const rta = new XboxRTA({ getXboxToken: () => new Promise(resolve => { resolveToken = resolve }) })
+      global.fetch = async () => assert.fail('late request')
+      const rta = new XboxRTA({
+        getXboxToken: (relyingParty, forceRefresh) => {
+          assert.equal(forceRefresh, undefined)
+          return new Promise(resolve => { resolveToken = resolve })
+        }
+      })
       const connecting = assert.rejects(rta.connect({ timeout: 10 }), cancel ? /closed/ : /timed out/)
-      if (cancel) await rta.destroy()
+      await tick()
+      if (cancel) await rta.close()
       await connecting
       resolveToken({ userHash: 'hash', XSTSToken: 'token' })
       await tick()
-      assert.equal(fetched, false)
       assert.equal(rta.ws, null)
-      await rta.destroy()
+      await rta.close()
     }
   } finally { global.fetch = originalFetch }
 })
 
-test('deadline aborts nonce fetch and bounds body reading', async () => {
-  const originalFetch = global.fetch
-  try {
-    let signal
-    global.fetch = async (url, options) => {
-      signal = options.signal
-      return { ok: true, json: () => new Promise(() => {}) }
-    }
-    const rta = new XboxRTA({ getXboxToken: async () => ({ userHash: 'hash', XSTSToken: 'token' }) })
-    await assert.rejects(rta.connect({ timeout: 10 }), /timed out/)
-    assert.equal(signal.aborted, true)
-    assert.equal(rta.ws, null)
-    await rta.destroy()
-  } finally { global.fetch = originalFetch }
-})
-
-test('forwards transport errors and reports malformed responses', () => {
+it('reports malformed message shapes and forwards resync notifications', async () => {
   const rta = ready()
   const errors = []
   rta.on('error', error => errors.push(error))
-  rta.onError(new Error('socket failed'))
-  assert.doesNotThrow(() => rta.onMessage('{'))
-  assert.equal(errors.length, 2)
-})
-
-test('honors caller abort before authentication', async () => {
-  const controller = new AbortController()
-  controller.abort(new Error('caller cancelled'))
-  const rta = new XboxRTA({ getXboxToken () { assert.fail('must not authenticate') } })
-  await assert.rejects(rta.connect({ signal: controller.signal }), /caller cancelled/)
-  await rta.destroy()
-})
-
-test('terminates a connecting socket without waiting for close', async () => {
-  const rta = new XboxRTA({})
-  let terminated = 0
-  rta.ws = { readyState: 0, on () {}, terminate () { terminated++ } }
-  await rta.destroy()
-  await rta.destroy()
-  assert.equal(terminated, 1)
-  assert.equal(rta.ws, null)
-})
-
-test('serializes subscription URIs and removes the acknowledged subscription by its ID', async () => {
-  const rta = ready()
-  const sent = []
-  rta.ws.send = message => sent.push(JSON.parse(message))
-  const pending = rta.subscribe('https://example.com/"quoted"')
-  assert.equal(sent[0][2], 'https://example.com/"quoted"')
-  rta.onMessage('[1,0,0,42,{}]')
-  await pending
-  const unsubscribing = rta.unsubscribe(42)
-  assert.deepEqual(sent[1], [2, 1, 42])
-  rta.onMessage('[2,1,0]')
-  await unsubscribing
-  assert.equal(rta.subscriptions.size, 0)
-  await rta.destroy()
-})
-
-test('ignores late subscription responses and never restores subscriptions after destroy', async () => {
-  const rta = ready()
-  rta.onMessage('[1,99,0,42,{}]')
-  assert.equal(rta.subscriptions.size, 0)
-  rta.once('subscribe', () => { rta.destroy() })
-  const pending = rta.subscribe('test')
-  rta.onMessage('[1,0,0,42,{}]')
-  await pending
-  assert.equal(rta.subscriptions.size, 0)
-})
-
-test('reports malformed message shapes and forwards resync notifications', async () => {
-  const rta = ready()
-  const errors = []
-  rta.on('error', error => errors.push(error))
-  for (const message of ['null', '{}']) assert.doesNotThrow(() => rta.onMessage(message))
-  assert.equal(errors.length, 2)
+  for (const message of ['null', '{}', '{']) assert.doesNotThrow(() => rta.onMessage(message))
+  assert.equal(errors.length, 3)
   let resynced = false
   rta.on('resync', () => { resynced = true })
   rta.onMessage('[4]')
   assert.equal(resynced, true)
-  await rta.destroy()
+  await rta.close()
+})
+
+it('closing during resubscribe prevents resurrection and cleans up a late wire response', async () => {
+  const rta = ready()
+  const sent = []
+  rta.ws.send = raw => {
+    const [type, sequence, payload] = JSON.parse(raw)
+    sent.push([type, sequence, payload])
+    if (type === 1 && sequence === 0) rta.onMessage('[1,0,0,42,{}]')
+    if (type === 2) rta.onMessage(JSON.stringify([2, sequence, 0]))
+  }
+  const sub = await rta.subscribe('test')
+  rta.onOpen()
+  await tick()
+  await sub.close()
+  rta.onMessage('[1,1,0,43,{}]')
+  await tick()
+  await rta.close()
+  assert.equal(sub.closed, true)
+  assert.equal(rta._subscriptions.size, 0)
+  assert.deepEqual(sent.at(-1), [2, 2, 43])
 })
