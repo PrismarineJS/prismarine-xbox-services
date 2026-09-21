@@ -93,7 +93,19 @@ export class RtaSubscription<T = unknown> extends EventEmitter {
   on(event: 'ready' | 'data', listener: (data: T) => void): this
   on(event: string | symbol, listener: (...args: any[]) => void): this
 }
-export class XboxRTA extends EventEmitter {
+export class SocketError extends Error {
+  constructor(message?: string, options?: ErrorOptions)
+}
+export class SocketClosedError extends SocketError {
+  constructor(message?: string)
+}
+export class SocketNotConnectedError extends SocketError {
+  constructor()
+}
+export class SocketAlreadyConnectedError extends SocketError {
+  constructor()
+}
+export class XboxRTASocket extends EventEmitter {
   constructor(authflow: XboxTokenProvider)
   connect(options?: OperationOptions): Promise<void>
   reconnect(): Promise<void>

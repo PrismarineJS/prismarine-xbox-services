@@ -3,7 +3,7 @@ const test = it
 const assert = require('node:assert/strict')
 const { EventEmitter } = require('node:events')
 const wsModule = require('ws')
-const { XboxRTA } = require('../')
+const { XboxRTASocket, SocketClosedError, SocketAlreadyConnectedError } = require('../')
 const tick = () => new Promise(resolve => setImmediate(resolve))
 
 async function withSocket (run) {
@@ -20,7 +20,7 @@ async function withSocket (run) {
   }
   wsModule.WebSocket = FakeSocket
   global.fetch = async () => ({ ok: true, json: async () => ({ nonce: 'nonce' }) })
-  const rta = new XboxRTA({ getXboxToken: async () => ({ userHash: 'hash', XSTSToken: 'token' }) })
+  const rta = new XboxRTASocket({ getXboxToken: async () => ({ userHash: 'hash', XSTSToken: 'token' }) })
   try { await run(rta, sockets) } finally { await rta.close(); wsModule.WebSocket = Original; global.fetch = originalFetch }
 }
 
@@ -31,9 +31,11 @@ test('connect waits for open and removes the startup deadline after success', as
     const connecting = rta.connect({ timeout: 30, signal: controller.signal }).then(() => { connected = true })
     await tick()
     assert.equal(connected, false)
+    await assert.rejects(rta.connect(), SocketAlreadyConnectedError)
     sockets[0].open()
     await connecting
     assert.equal(connected, true)
+    await assert.rejects(rta.connect(), SocketAlreadyConnectedError)
     assert.equal(rta.startup, null)
     controller.abort()
     await new Promise(resolve => setTimeout(resolve, 40))
@@ -70,7 +72,7 @@ test('normal server close clears timers and pending requests and permits reconne
     sockets[0].open()
     await first
     rta.heartbeat()
-    const pending = assert.rejects(rta.subscribe('test'), /closed/)
+    const pending = assert.rejects(rta.subscribe('test'), SocketClosedError)
     sockets[0].serverClose(1000)
     await pending
     assert.equal(rta.ws, null)
@@ -82,7 +84,7 @@ test('normal server close clears timers and pending requests and permits reconne
     await second
     assert.equal(rta.ws, sockets[1])
     await rta.close()
-    await assert.rejects(rta.connect(), /closed/)
+    await assert.rejects(rta.connect(), SocketClosedError)
   })
 })
 

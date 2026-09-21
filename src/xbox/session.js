@@ -1,7 +1,7 @@
 const { randomUUID } = require('crypto')
 const { EventEmitter } = require('events')
 const { isDeepStrictEqual } = require('util')
-const { XboxRTA } = require('../rta')
+const { XboxRTASocket } = require('../rta')
 const { operation } = require('../operation')
 const debug = require('debug')('prismarine-xbox-services:session')
 
@@ -12,7 +12,7 @@ class XboxSession extends EventEmitter {
     this.name = name
     this.state = 'opening'
     this._lifetime = new AbortController()
-    this._rta = new XboxRTA(client.authflow)
+    this._rta = new XboxRTASocket(client.authflow)
     this._membershipAttempted = false
     this._refresh = Promise.resolve()
     this._activityPublished = false

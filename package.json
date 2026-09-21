@@ -32,7 +32,7 @@
     "mocha": "^11.1.0",
     "prismarine-xbox-services": "file:.",
     "typescript": "^5.3.3",
-    "@types/node": "^22.0.0",
+    "@types/node": "^24.0.0",
     "prismarine-auth": "^3.1.1"
   },
   "files": [
@@ -42,7 +42,7 @@
     "HISTORY.md"
   ],
   "engines": {
-    "node": ">=22"
+    "node": ">=24"
   },
   "types": "types/index.d.ts",
   "dependencies": {

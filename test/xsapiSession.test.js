@@ -1,7 +1,7 @@
 /* eslint-env mocha */
 const assert = require('assert/strict')
 const { EventEmitter } = require('events')
-const { XboxClient, XboxSession, XboxRTA } = require('..')
+const { XboxClient, XboxSession, XboxRTASocket } = require('..')
 const title = { titleId: '123', scid: 'example', templateName: 'Lobby', timeout: 500 }
 const auth = { getXboxToken: async () => ({ userHash: 'hash', XSTSToken: 'token' }) }
 const tick = () => new Promise(resolve => setImmediate(resolve))
@@ -15,14 +15,14 @@ describe('managed sessions', () => {
   let originalFetch, connect, subscribe, requests, subscription, rta, document
   beforeEach(() => {
     originalFetch = global.fetch
-    connect = XboxRTA.prototype.connect
-    subscribe = XboxRTA.prototype.subscribe
+    connect = XboxRTASocket.prototype.connect
+    subscribe = XboxRTASocket.prototype.subscribe
     requests = []
     document = { properties: { custom: { game: 'example' } } }
     subscription = new EventEmitter()
     subscription.data = { ConnectionId: 'connection' }
-    XboxRTA.prototype.connect = async function () { rta = this }
-    XboxRTA.prototype.subscribe = async () => subscription
+    XboxRTASocket.prototype.connect = async function () { rta = this }
+    XboxRTASocket.prototype.subscribe = async () => subscription
     global.fetch = async (url, options) => {
       const body = options.body && JSON.parse(options.body)
       requests.push({ url, ...options, body })
@@ -33,8 +33,8 @@ describe('managed sessions', () => {
   })
   afterEach(() => {
     global.fetch = originalFetch
-    XboxRTA.prototype.connect = connect
-    XboxRTA.prototype.subscribe = subscribe
+    XboxRTASocket.prototype.connect = connect
+    XboxRTASocket.prototype.subscribe = subscribe
   })
 
   it('returns ready sessions with matching create/join APIs and no redundant property write', async () => {
@@ -290,7 +290,7 @@ describe('managed sessions', () => {
   })
 
   it('rejects startup RTA failures without an unhandled error event', async () => {
-    XboxRTA.prototype.subscribe = async function () {
+    XboxRTASocket.prototype.subscribe = async function () {
       this.emit('error', new Error('transport failed'))
       throw new Error('transport failed')
     }

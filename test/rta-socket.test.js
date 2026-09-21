@@ -2,7 +2,7 @@
 const assert = require('assert/strict')
 const { once } = require('events')
 const wsModule = require('ws')
-const { XboxRTA } = require('..')
+const { XboxRTASocket } = require('..')
 
 it('preserves a subscription across real WebSocket reconnection and closes its current ID', async () => {
   const server = new wsModule.WebSocketServer({ port: 0, host: '127.0.0.1' })
@@ -29,7 +29,7 @@ it('preserves a subscription across real WebSocket reconnection and closes its c
     }
   }
   global.fetch = async () => new Response('{"nonce":"local"}')
-  const rta = new XboxRTA({ getXboxToken: async () => ({ userHash: 'hash', XSTSToken: 'token' }) })
+  const rta = new XboxRTASocket({ getXboxToken: async () => ({ userHash: 'hash', XSTSToken: 'token' }) })
   try {
     await rta.connect()
     const subscription = await rta.subscribe('https://sessiondirectory.xboxlive.com/connections/')

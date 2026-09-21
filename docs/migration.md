@@ -29,4 +29,10 @@ Creation accepts an optional `name`. Both creation and joining now read the init
 available as `session.current`, and report subsequent changes through session events.
 Call `await session.setActivity()` explicitly after creation/joining when activity publication
 is desired; it is no longer automatic. Keep that call inside the consumer's cleanup scope.
-The existing XboxClient, XboxSession, XboxRTA and PlayFabClient classes remain.
+The existing XboxClient, XboxSession, XboxRTASocket and PlayFabClient classes remain.
+
+## RTA socket naming and Node version
+
+Rename `XboxRTA` imports and constructors to `XboxRTASocket`; there is no compatibility alias.
+Socket lifecycle failures now expose the error classes documented in [RTA](rta.md), so callers
+can use `instanceof` instead of matching message text. Node.js 24 or newer is required.

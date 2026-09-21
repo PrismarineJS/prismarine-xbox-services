@@ -1,8 +1,8 @@
 # Xbox Real Time Activity (experimental)
 
 ```js
-const { XboxRTA } = require('prismarine-xbox-services')
-const rta = new XboxRTA(auth)
+const { XboxRTASocket } = require('prismarine-xbox-services')
+const rta = new XboxRTASocket(auth)
 rta.on('error', handleBackgroundFailure)
 rta.on('resync', refreshAuthoritativeState)
 try {
@@ -43,3 +43,10 @@ Authentication refresh decisions stay with the credential provider.
 
 Diagnostics: `DEBUG=prismarine-xbox-services:rta`. Public members are documented above;
 transport state and maps are implementation details. 
+
+Socket state failures use exported error classes from `rta/constants.js`:
+`SocketClosedError`, `SocketNotConnectedError`, and `SocketAlreadyConnectedError` all
+extend `SocketError`. They can be caught with `instanceof`; their `name` matches the class.
+`SocketAlreadyConnectedError` also covers a connection attempt already in progress.
+An explicit reconnect rejects interrupted work with `SocketError`. Service failures,
+timeouts and caller cancellation retain their existing errors/reasons.

@@ -1,5 +1,8 @@
 ## Unreleased
 
+- Rename XboxRTA to XboxRTASocket and expose socket lifecycle error classes.
+- Require Node.js 24 or newer.
+
 - Normalize Xbox profiles and allow caller-named sessions with explicit activity publication.
 - Add managed session snapshots and document, member and property change events.
 - Add session-ticket PlayFab title data, inventory and CloudScript helpers.

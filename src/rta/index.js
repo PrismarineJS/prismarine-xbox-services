@@ -3,11 +3,11 @@ const { EventEmitter } = require('events')
 const { operation } = require('../operation')
 const { RtaSubscription } = require('./subscription')
 const wsModule = require('ws')
-const { MessageType, StatusCode, convertRTAStatus } = require('./constants')
+const { MessageType, StatusCode, convertRTAStatus, SocketError, SocketClosedError, SocketNotConnectedError, SocketAlreadyConnectedError } = require('./constants')
 const debug = require('debug')('prismarine-xbox-services:rta')
 const address = 'wss://rta.xboxlive.com/connect'
 
-class XboxRTA extends EventEmitter {
+class XboxRTASocket extends EventEmitter {
   promiseMap = new Map()
   startup = null
   closed = false
@@ -22,8 +22,8 @@ class XboxRTA extends EventEmitter {
   }
 
   async connect (options = {}) {
-    if (this.closed) { throw new Error('RTA connection is closed') }
-    if (this.startup || this.ws) { throw new Error('RTA connection already started') }
+    if (this.closed) { throw new SocketClosedError() }
+    if (this.startup || this.ws) { throw new SocketAlreadyConnectedError() }
     this.options = { timeout: options.timeout }
     await this.init(options)
   }
@@ -31,16 +31,16 @@ class XboxRTA extends EventEmitter {
   async close () {
     if (this.closed) return
     this.closed = true
-    this.startup?.abort(new Error('RTA connection closed'))
-    this.releaseConnection(new Error('RTA connection closed'))
+    this.startup?.abort(new SocketClosedError())
+    this.releaseConnection(new SocketClosedError())
     for (const subscription of this._subscriptions) subscription._dispose()
     this._subscriptions.clear()
   }
 
   async reconnect () {
-    if (this.closed) throw new Error('RTA connection is closed')
-    this.startup?.abort(new Error('RTA connection reconnecting'))
-    this.releaseConnection(new Error('RTA connection reconnecting'))
+    if (this.closed) throw new SocketClosedError()
+    this.startup?.abort(new SocketError('RTA connection reconnecting'))
+    this.releaseConnection(new SocketError('RTA connection reconnecting'))
     return this.init(this.options)
   }
 
@@ -77,7 +77,7 @@ class XboxRTA extends EventEmitter {
     const response = await this.send(MessageType.Subscribe, subscription.uri, {
       ...options, signal: AbortSignal.any([subscription._lifetime.signal, ...[options.signal].filter(Boolean)])
     })
-    if (this.closed) throw new Error('RTA connection is closed')
+    if (this.closed) throw new SocketClosedError()
     if (subscription.closed) {
       await this.send(MessageType.Unsubscribe, response.subscriptionId)
       subscription._lifetime.signal.throwIfAborted()
@@ -95,8 +95,8 @@ class XboxRTA extends EventEmitter {
   }
 
   async send (type, payload, options = {}) {
-    if (this.closed) throw new Error('RTA connection is closed')
-    if (this.ws?.readyState !== wsModule.WebSocket.OPEN) throw new Error('RTA is not connected')
+    if (this.closed) throw new SocketClosedError()
+    if (this.ws?.readyState !== wsModule.WebSocket.OPEN) throw new SocketNotConnectedError()
     const socket = this.ws
     const sequenceId = this.sequenceId++
     const data = JSON.stringify([type, sequenceId, payload])
@@ -104,7 +104,7 @@ class XboxRTA extends EventEmitter {
       return await operation(signal => new Promise((resolve, reject) => {
         this.promiseMap.set(sequenceId, { resolve, reject, type, signal })
         signal.throwIfAborted()
-        if (this.ws !== socket) throw new Error('RTA connection closed')
+        if (this.ws !== socket) throw new SocketClosedError()
         socket.send(data)
       }), { signal: options.signal, timeout: options.timeout ?? 30000 })
     } finally {
@@ -113,7 +113,7 @@ class XboxRTA extends EventEmitter {
   }
 
   async init (options = {}) {
-    if (this.closed) { throw new Error('RTA connection is closed') }
+    if (this.closed) { throw new SocketClosedError() }
     const controller = new AbortController()
     this.startup = controller
     const start = async signal => {
@@ -156,7 +156,7 @@ class XboxRTA extends EventEmitter {
       }
       signal.addEventListener('abort', onAbort, { once: true })
       ws.onerror = event => finish(event.error)
-      ws.onclose = event => finish(new Error(`RTA closed before opening: ${event.code} ${event.reason}`))
+      ws.onclose = event => finish(new SocketClosedError(`RTA closed before opening: ${event.code} ${event.reason}`))
       ws.onopen = () => {
         if (signal.aborted) { return onAbort() }
         ws.onerror = event => {
@@ -204,7 +204,7 @@ class XboxRTA extends EventEmitter {
 
   onClose (code, reason) {
     debug(`RTA Disconnected from ${address} with code ${code} and reason ${reason}`)
-    this.releaseConnection(new Error(`RTA connection closed: ${code} ${reason}`))
+    this.releaseConnection(new SocketClosedError(`RTA connection closed: ${code} ${reason}`))
     this.emit('close', code, reason)
     if (code === 1006 && !this.closed) {
       this.init(this.options).catch(error => {
@@ -280,4 +280,4 @@ class XboxRTA extends EventEmitter {
   }
 }
 
-module.exports = { XboxRTA }
+module.exports = { XboxRTASocket }

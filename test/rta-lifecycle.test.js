@@ -1,9 +1,9 @@
 /* eslint-env mocha */
 const assert = require('assert/strict')
-const { XboxRTA } = require('..')
+const { XboxRTASocket, SocketError, SocketClosedError, SocketNotConnectedError } = require('..')
 const tick = () => new Promise(resolve => setImmediate(resolve))
 function ready () {
-  const rta = new XboxRTA({})
+  const rta = new XboxRTASocket({})
   rta.ws = { readyState: 1, send () {}, on () {}, terminate () {} }
   return rta
 }
@@ -23,15 +23,25 @@ it('isolates matching sequence IDs between instances', async () => {
 })
 
 it('rejects requests made before connecting rather than silently queuing', async () => {
-  const rta = new XboxRTA({})
-  await assert.rejects(rta.subscribe('test'), /not connected/)
+  const rta = new XboxRTASocket({})
+  await assert.rejects(rta.subscribe('test'), SocketNotConnectedError)
   assert.equal(rta._subscriptions.size, 0)
   await rta.close()
+  for (const call of [() => rta.connect(), () => rta.reconnect(), () => rta.subscribe('test')]) {
+    await assert.rejects(call(), error => {
+      assert(error instanceof SocketClosedError)
+      assert(error instanceof SocketError)
+      assert(error instanceof Error)
+      assert.equal(error.name, 'SocketClosedError')
+      assert.match(error.message, /closed/)
+      return true
+    })
+  }
 })
 
 it('closes pending subscriptions and clears connection bookkeeping', async () => {
   const rta = ready()
-  const pending = assert.rejects(rta.subscribe('test'), /closed/)
+  const pending = assert.rejects(rta.subscribe('test'), SocketClosedError)
   await tick()
   await rta.close()
   await pending
@@ -100,7 +110,7 @@ it('bounds authentication and prevents late requests without forcing token refre
     for (const cancel of [false, true]) {
       let resolveToken
       global.fetch = async () => assert.fail('late request')
-      const rta = new XboxRTA({
+      const rta = new XboxRTASocket({
         getXboxToken: (relyingParty, forceRefresh) => {
           assert.equal(forceRefresh, undefined)
           return new Promise(resolve => { resolveToken = resolve })
