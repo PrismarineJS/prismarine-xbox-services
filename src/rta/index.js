@@ -1,5 +1,7 @@
 // Adapted from LucienHH/xbox-rta; see licenses/xbox-rta.txt and docs/provenance.md.
 const { EventEmitter } = require('events')
+const { operation } = require('../operation')
+const { RtaSubscription } = require('./subscription')
 const wsModule = require('ws')
 const { MessageType, StatusCode, convertRTAStatus } = require('./constants')
 const debug = require('debug')('prismarine-xbox-services:rta')
@@ -9,7 +11,7 @@ class XboxRTA extends EventEmitter {
   promiseMap = new Map()
   startup = null
   closed = false
-  subscriptions = new Map()
+  _subscriptions = new Set()
   ws = null
   heartbeatTimeout = null
   reconnectTimeout = null
@@ -17,21 +19,29 @@ class XboxRTA extends EventEmitter {
   constructor (authflow) {
     super()
     this.authflow = authflow
-    this.queue = []
   }
 
   async connect (options = {}) {
     if (this.closed) { throw new Error('RTA connection is closed') }
     if (this.startup || this.ws) { throw new Error('RTA connection already started') }
+    this.options = { timeout: options.timeout }
     await this.init(options)
   }
 
-  async destroy (resume = false) {
-    if (!resume) { this.closed = true }
+  async close () {
+    if (this.closed) return
+    this.closed = true
     this.startup?.abort(new Error('RTA connection closed'))
     this.releaseConnection(new Error('RTA connection closed'))
-    if (!resume) { this.subscriptions.clear() }
-    if (resume && !this.closed) { return this.init() }
+    for (const subscription of this._subscriptions) subscription._dispose()
+    this._subscriptions.clear()
+  }
+
+  async reconnect () {
+    if (this.closed) throw new Error('RTA connection is closed')
+    this.startup?.abort(new Error('RTA connection reconnecting'))
+    this.releaseConnection(new Error('RTA connection reconnecting'))
+    return this.init(this.options)
   }
 
   // Shared by server close, failed startup and explicit destruction.
@@ -40,7 +50,6 @@ class XboxRTA extends EventEmitter {
     if (this.reconnectTimeout) { clearTimeout(this.reconnectTimeout) }
     this.heartbeatTimeout = this.reconnectTimeout = null
     for (const pending of this.promiseMap.values()) { pending.reject(error) }
-    this.queue = []
     const ws = this.ws
     this.ws = null
     if (ws) {
@@ -51,81 +60,87 @@ class XboxRTA extends EventEmitter {
     }
   }
 
-  async subscribe (uri) {
-    debug('Subscribing', uri)
-    const sequenceId = this.sequenceId++
-    return this.send(MessageType.Subscribe, sequenceId, uri)
+  async subscribe (uri, options = {}) {
+    const subscription = new RtaSubscription(this, uri)
+    try {
+      await this._subscribe(subscription, options)
+      this._subscriptions.add(subscription)
+      return subscription
+    } catch (error) {
+      subscription._dispose()
+      this._subscriptions.delete(subscription)
+      throw error
+    }
   }
 
-  async unsubscribe (subscriptionId) {
-    if (!Number.isSafeInteger(subscriptionId) || subscriptionId < 0) throw new TypeError('RTA subscriptionId must be a non-negative integer')
-    debug('Unsubscribing', subscriptionId)
-    const sequenceId = this.sequenceId++
-    return this.send(MessageType.Unsubscribe, sequenceId, subscriptionId)
-  }
-
-  async send (type, sequenceId, payload) {
-    const data = JSON.stringify([type, sequenceId, payload])
-    debug('Sending', data)
-    if (this.closed) { throw new Error('RTA connection is closed') }
-    return new Promise((resolve, reject) => {
-      const sendTimeout = setTimeout(() => onRej(new Error('Timeout')), 30000)
-      const cleanup = () => {
-        clearTimeout(sendTimeout)
-        this.promiseMap.delete(sequenceId)
-        this.queue = this.queue.filter(message => message !== data)
-      }
-      const onRes = (res) => { cleanup(); resolve(res) }
-      const onRej = (err) => { cleanup(); reject(err) }
-      this.promiseMap.set(sequenceId, { resolve: onRes, reject: onRej, data: payload })
-      try {
-        if (this.ws?.readyState === wsModule.WebSocket.OPEN) { this.ws.send(data) } else { this.queue.push(data) }
-      } catch (error) {
-        onRej(error)
-      }
+  async _subscribe (subscription, options = {}) {
+    const response = await this.send(MessageType.Subscribe, subscription.uri, {
+      ...options, signal: AbortSignal.any([subscription._lifetime.signal, ...[options.signal].filter(Boolean)])
     })
+    if (this.closed) throw new Error('RTA connection is closed')
+    if (subscription.closed) {
+      await this.send(MessageType.Unsubscribe, response.subscriptionId)
+      subscription._lifetime.signal.throwIfAborted()
+    }
+    subscription._id = response.subscriptionId
+    subscription.data = response.data
+    subscription.emit('ready', response.data)
+  }
+
+  async _unsubscribe (subscription) {
+    this._subscriptions.delete(subscription)
+    if (this.ws?.readyState === wsModule.WebSocket.OPEN && subscription._id !== null) {
+      await this.send(MessageType.Unsubscribe, subscription._id)
+    }
+  }
+
+  async send (type, payload, options = {}) {
+    if (this.closed) throw new Error('RTA connection is closed')
+    if (this.ws?.readyState !== wsModule.WebSocket.OPEN) throw new Error('RTA is not connected')
+    const socket = this.ws
+    const sequenceId = this.sequenceId++
+    const data = JSON.stringify([type, sequenceId, payload])
+    try {
+      return await operation(signal => new Promise((resolve, reject) => {
+        this.promiseMap.set(sequenceId, { resolve, reject, type, signal })
+        signal.throwIfAborted()
+        if (this.ws !== socket) throw new Error('RTA connection closed')
+        socket.send(data)
+      }), { signal: options.signal, timeout: options.timeout ?? 30000 })
+    } finally {
+      this.promiseMap.delete(sequenceId)
+    }
   }
 
   async init (options = {}) {
     if (this.closed) { throw new Error('RTA connection is closed') }
     const controller = new AbortController()
     this.startup = controller
-    const abort = () => controller.abort(options.signal?.reason)
-    if (options.signal?.aborted) { abort() } else { options.signal?.addEventListener('abort', abort, { once: true }) }
-    const timer = setTimeout(() => controller.abort(new Error('RTA startup timed out')), options.timeout ?? 15000)
-    let onAbort = () => { }
-    const cancelled = new Promise((_resolve, reject) => {
-      onAbort = () => reject(controller.signal.reason)
-      if (controller.signal.aborted) { onAbort() } else { controller.signal.addEventListener('abort', onAbort, { once: true }) }
-    })
-    const start = async () => {
-      controller.signal.throwIfAborted()
-      const xbl = await this.authflow.getXboxToken('http://xboxlive.com', true)
+    const start = async signal => {
+      signal.throwIfAborted()
+      const xbl = await this.authflow.getXboxToken('http://xboxlive.com')
       const authorization = `XBL3.0 x=${xbl.userHash};${xbl.XSTSToken}`
-      controller.signal.throwIfAborted()
+      signal.throwIfAborted()
       const nonceResponse = await fetch('https://rta.xboxlive.com/nonce', {
         headers: { authorization },
-        signal: controller.signal,
+        signal,
         redirect: 'error'
       })
       if (!nonceResponse.ok) {
         throw new Error(`Failed to fetch RTA nonce: ${nonceResponse.status} ${nonceResponse.statusText}`)
       }
       const { nonce } = await nonceResponse.json()
-      controller.signal.throwIfAborted()
-      await this.openSocket(nonce, controller.signal)
+      signal.throwIfAborted()
+      await this.openSocket(nonce, signal)
     }
     try {
-      await Promise.race([start(), cancelled])
+      await operation(start, options, controller.signal)
     } catch (error) {
       // An older cancelled attempt must not clean up a replacement connection.
-      if (this.startup === controller) { this.releaseConnection(error) }
+      if (this.startup === controller) this.releaseConnection(error)
       throw error
     } finally {
-      clearTimeout(timer)
-      options.signal?.removeEventListener('abort', abort)
-      controller.signal.removeEventListener('abort', onAbort)
-      if (this.startup === controller) { this.startup = null }
+      if (this.startup === controller) this.startup = null
     }
   }
 
@@ -170,18 +185,16 @@ class XboxRTA extends EventEmitter {
     debug('RTA Connected to', address)
     this.reconnectTimeout = setTimeout(() => {
       debug(`Reconnecting to ${address}`)
-      this.destroy(true).catch(error => {
+      this.reconnect().catch(error => {
         if (!this.closed) { this.emit('error', error) }
       })
     }, 90 * 60 * 1000) // 90 minutes
-    this.queue.forEach(message => this.ws.send(message))
-    this.queue = []
-    this.subscriptions.forEach((sub) => {
-      if (sub.uri) {
-        this.send(sub.type, sub.sequenceId, sub.uri)
-          .catch((err) => { debug('Resubscribe failed', err) })
-      }
-    })
+    for (const subscription of this._subscriptions) {
+      subscription._id = null
+      this._subscribe(subscription).catch(error => {
+        if (!this.closed && !subscription.closed) this.emit('error', error)
+      })
+    }
   }
 
   onError (err) {
@@ -194,7 +207,7 @@ class XboxRTA extends EventEmitter {
     this.releaseConnection(new Error(`RTA connection closed: ${code} ${reason}`))
     this.emit('close', code, reason)
     if (code === 1006 && !this.closed) {
-      this.init().catch(error => {
+      this.init(this.options).catch(error => {
         if (!this.closed) { this.emit('error', error) }
       })
     }
@@ -214,42 +227,33 @@ class XboxRTA extends EventEmitter {
     const messageType = msgJson[0]
     debug('Received message', res)
     switch (messageType) {
-      case MessageType.Subscribe: {
-        const [type, sequenceId, status, subscriptionId, data] = msgJson
-        const promise = this.promiseMap.get(sequenceId)
-        if (!promise) return
-        if (status !== StatusCode.Success) {
-          debug('Subscribe failed', status)
-          promise?.reject(new Error(`Subscribe failed with status code ${status} ${convertRTAStatus(status)}`))
-          this.emit('error', new Error(`Subscribe failed with status code ${status} ${convertRTAStatus(status)}`))
-        } else {
-          const sub = { type, sequenceId, status, subscriptionId, data, uri: promise?.data ?? null }
-          promise?.resolve(sub)
-          this.subscriptions.set(sequenceId, sub)
-          this.emit('subscribe', sub)
-        }
-        break
-      }
+      case MessageType.Subscribe:
       case MessageType.Unsubscribe: {
-        const [type, sequenceId, status] = msgJson
-        const promise = this.promiseMap.get(sequenceId)
-        if (!promise) return
-        if (status !== StatusCode.Success) {
-          debug('Unsubscribe failed', status)
-          promise?.reject(new Error(`Unsubscribe failed with status code ${status} ${convertRTAStatus(status)}`))
-          this.emit('error', new Error(`Unsubscribe failed with status code ${status} ${convertRTAStatus(status)}`))
-        } else {
-          for (const [key, sub] of this.subscriptions) {
-            if (sub.subscriptionId === promise.data) this.subscriptions.delete(key)
+        const [type, sequenceId, status, subscriptionId, data] = msgJson
+        const pending = this.promiseMap.get(sequenceId)
+        if (!pending || pending.signal.aborted) {
+          this.promiseMap.delete(sequenceId)
+          if (type === MessageType.Subscribe && status === StatusCode.Success && this.ws?.readyState === wsModule.WebSocket.OPEN) {
+            this.send(MessageType.Unsubscribe, subscriptionId).catch(error => {
+              if (!this.closed) this.emit('error', error)
+            })
           }
-          promise.resolve({ type, sequenceId, status })
-          this.emit('unsubscribe', { type, sequenceId, status })
+          return
+        }
+        if (pending.type !== type) return
+        this.promiseMap.delete(sequenceId)
+        if (status !== StatusCode.Success) {
+          pending.reject(new Error(`RTA request failed: ${status} ${convertRTAStatus(status)}`))
+        } else {
+          pending.resolve({ subscriptionId, data })
         }
         break
       }
       case MessageType.Event: {
-        const [type, subscriptionId, data] = msgJson
-        this.emit('event', { type, subscriptionId, data })
+        const [, subscriptionId, data] = msgJson
+        for (const subscription of this._subscriptions) {
+          if (subscription._id === subscriptionId) subscription.emit('data', data)
+        }
         break
       }
       case MessageType.Resync: {
@@ -269,7 +273,7 @@ class XboxRTA extends EventEmitter {
     }
     this.heartbeatTimeout = setTimeout(() => {
       debug('RTA Ping Timeout')
-      this.destroy(true).catch(error => {
+      this.reconnect().catch(error => {
         if (!this.closed) { this.emit('error', error) }
       })
     }, 30000)

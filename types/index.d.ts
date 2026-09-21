@@ -1,22 +1,25 @@
 import { EventEmitter } from 'events'
-/** Structural interface implemented by prismarine-auth's Authflow. */
+
+/** Implemented by prismarine-auth's Authflow. Authentication remains caller-owned. */
 export interface XboxTokenProvider {
   getXboxToken(relyingParty?: string, forceRefresh?: boolean): Promise<{ userHash: string; XSTSToken: string }>
 }
-
-/** Experimental API: coordinate updates with consumers. */
-export interface TitleOptions {
-  titleId: string
-  scid: string
-  templateName: string
+export interface OperationOptions {
   timeout?: number
+  signal?: AbortSignal
 }
-export interface RequestOptions {
+export interface XboxOptions {
+  titleId?: string
+  scid?: string
+  templateName?: string
+  timeout?: number
+  cleanupTimeout?: number
+}
+export type UserIdentifier = 'me' | { xuid: string; gamertag?: never } | { gamertag: string; xuid?: never }
+export interface RequestOptions extends OperationOptions {
   data?: unknown
   headers?: Record<string, string>
   contractVersion?: string
-  timeout?: number
-  signal?: AbortSignal
 }
 export interface Profile {
   id: string
@@ -26,86 +29,72 @@ export interface SessionProperties {
   system?: Record<string, unknown>
   custom?: Record<string, unknown>
 }
-export interface Session {
+export interface SessionDocument {
   properties: SessionProperties
   [key: string]: unknown
 }
-export interface SessionHandle {
-  sessionRef: { scid: string; templateName: string; name: string }
+export interface SessionReference {
+  scid: string
+  templateName: string
+  name: string
+}
+export interface ActivityHandle {
+  sessionRef: SessionReference
   [key: string]: unknown
 }
+export interface CreateSessionOptions extends OperationOptions {
+  properties?: SessionProperties | ((context: { profile: Profile }) => SessionProperties | Promise<SessionProperties>)
+}
 export class XboxClient {
-  constructor(authflow: XboxTokenProvider, options?: Partial<TitleOptions>)
-  get<T = unknown>(url: string, config?: RequestOptions): Promise<T | undefined>
-  post<T = unknown>(url: string, config?: RequestOptions): Promise<T | undefined>
-  put<T = unknown>(url: string, config?: RequestOptions): Promise<T | undefined>
-  delete<T = unknown>(url: string, config?: RequestOptions): Promise<T | undefined>
+  constructor(authflow: XboxTokenProvider, options?: XboxOptions)
+  request<T = unknown>(method: string, url: string, options?: RequestOptions): Promise<T | undefined>
   abortPending(): void
-  getProfile(identifier: string): Promise<Profile>
-  getSessions(xuid: string): Promise<SessionHandle[]>
-  getSession(name: string): Promise<Session>
-  updateSession(name: string, payload: Record<string, unknown>): Promise<unknown>
-  setActivity(name: string): Promise<unknown>
-  sendInvite(name: string, xuid: string): Promise<unknown>
-  leaveSession(name: string): Promise<void>
-  sessionRef(name: string): SessionHandle['sessionRef']
-  sessionUrl(name: string): string
-  sendHandle(payload: Record<string, unknown>): Promise<unknown>
-  addConnection(name: string, xuid: string, connectionId: string, subscriptionId: string): Promise<void>
-  updateConnection(name: string, connectionId: string): Promise<void>
+  getProfile(identifier?: UserIdentifier, options?: OperationOptions): Promise<Profile>
+  getActivityHandles(xuid: string, options?: OperationOptions): Promise<ActivityHandle[]>
+  getSession(name: string, options?: OperationOptions): Promise<SessionDocument>
+  updateSession(name: string, payload: Record<string, unknown>, options?: OperationOptions): Promise<unknown>
+  setActivity(name: string, options?: OperationOptions): Promise<unknown>
+  sendInvite(name: string, xuid: string, options?: OperationOptions): Promise<unknown>
+  createSession(options?: CreateSessionOptions): Promise<XboxSession>
+  joinSession(name: string, options?: OperationOptions): Promise<XboxSession>
 }
-export class SessionDirectory extends EventEmitter {
-  constructor(authflow: XboxTokenProvider, options: TitleOptions)
-  /** This client belongs to this session; end() cancels its pending requests. */
-  readonly client: XboxClient
+export class XboxSession extends EventEmitter {
+  private constructor()
   readonly name: string
-  readonly profile: Profile | null
-  readonly connectionId: string | null
-  readonly rta: XboxRTA | null
-  createSession(properties?: SessionProperties | ((context: { profile: Profile }) => SessionProperties)): Promise<void>
-  joinSession(name: string): Promise<Session>
-  getSession(): Promise<Session>
-  updateSession(payload: Record<string, unknown>): Promise<void>
-  invitePlayer(identifier: string): Promise<void>
-  end(): Promise<void>
+  readonly state: 'opening' | 'open' | 'closing' | 'closed'
+  get(options?: OperationOptions): Promise<SessionDocument>
+  updateProperties(properties: SessionProperties, options?: OperationOptions): Promise<void>
+  invite(identifier: UserIdentifier, options?: OperationOptions): Promise<void>
+  close(): Promise<void>
 }
-
-export interface ConnectionOptions {
-  timeout?: number
-  signal?: AbortSignal
-}
-export interface SubscribeResponse<T = unknown> {
-  type: number
-  sequenceId: number
-  status: number
-  subscriptionId: number
-  data: T
-  uri: string | null
-}
-export interface UnsubscribeResponse {
-  type: number
-  sequenceId: number
-  status: number
-}
-export interface EventResponse<T = unknown> {
-  type: number
-  subscriptionId: number
-  data: T
+export class RtaSubscription<T = unknown> extends EventEmitter {
+  private constructor()
+  readonly uri: string
+  readonly data: T
+  readonly closed: boolean
+  close(): Promise<void>
+  on(event: 'ready' | 'data', listener: (data: T) => void): this
+  on(event: string | symbol, listener: (...args: any[]) => void): this
 }
 export class XboxRTA extends EventEmitter {
   constructor(authflow: XboxTokenProvider)
-  readonly subscriptions: ReadonlyMap<number, SubscribeResponse>
-  connect(options?: ConnectionOptions): Promise<void>
-  subscribe<T = unknown>(uri: string): Promise<SubscribeResponse<T>>
-  unsubscribe(subscriptionId: number): Promise<UnsubscribeResponse>
-  destroy(resume?: boolean): Promise<void>
-  on(event: 'subscribe', listener: (response: SubscribeResponse) => void): this
-  on(event: 'unsubscribe', listener: (response: UnsubscribeResponse) => void): this
-  on(event: 'event', listener: (response: EventResponse) => void): this
+  connect(options?: OperationOptions): Promise<void>
+  reconnect(): Promise<void>
+  subscribe<T = unknown>(uri: string, options?: OperationOptions): Promise<RtaSubscription<T>>
+  close(): Promise<void>
   on(event: 'resync', listener: () => void): this
   on(event: 'close', listener: (code: number, reason: string) => void): this
   on(event: 'error', listener: (error: Error) => void): this
   on(event: string | symbol, listener: (...args: any[]) => void): this
+}
+export class ServiceError extends Error {
+  constructor(service: string, status: number, body: string, details?: { error?: string; errorMessage?: string; errorCode?: number; errorDetails?: Record<string, unknown> })
+  readonly service: string
+  readonly status: number
+  readonly body: string
+  readonly code?: string
+  readonly errorCode?: number
+  readonly details?: Record<string, unknown>
 }
 export interface PlayFabCredentials {
   SessionTicket?: string
@@ -115,7 +104,7 @@ export interface PlayFabOptions {
   titleId: string
   timeout?: number
 }
-export interface PlayFabRequestOptions extends ConnectionOptions {
+export interface PlayFabRequestOptions extends OperationOptions {
   auth?: 'session' | 'entity'
 }
 export class PlayFabClient {

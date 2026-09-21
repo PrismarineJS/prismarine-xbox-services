@@ -1,6 +1,5 @@
 const { JsonClient } = require('../http')
-
-const isXuid = xuid => /^\d+$/.test(xuid)
+const { XboxSession } = require('./session')
 
 class XboxClient extends JsonClient {
   constructor (authflow, options = {}) {
@@ -8,141 +7,77 @@ class XboxClient extends JsonClient {
     this.authflow = authflow
   }
 
-  async get (url, config = {}) {
-    return await this._request('GET', { url, ...config })
-  }
-
-  async post (url, config = {}) {
-    return await this._request('POST', { url, ...config })
-  }
-
-  async put (url, config = {}) {
-    return await this._request('PUT', { url, ...config })
-  }
-
-  async delete (url, config = {}) {
-    return await this._request('DELETE', { url, ...config })
+  request (method, url, options = {}) {
+    return this._request(method, { ...options, url })
   }
 
   async getHeaders () {
     const auth = await this.authflow.getXboxToken('http://xboxlive.com')
-    return { authorization: `XBL3.0 x=${auth.userHash};${auth.XSTSToken}` }
+    return { authorization: `XBL3.0 x=${auth.userHash};${auth.XSTSToken}`, 'accept-language': 'en-US' }
   }
 
-  requireSessionConfig () {
+  _sessionRef (name) {
     for (const field of ['scid', 'templateName']) {
       if (!this.options[field]) throw new TypeError(`Xbox session requires ${field}`)
     }
-  }
-
-  sessionRef (name) {
-    this.requireSessionConfig()
     return { scid: this.options.scid, templateName: this.options.templateName, name }
   }
 
-  sessionUrl (name) {
-    const ref = this.sessionRef(name)
+  _sessionUrl (name) {
+    const ref = this._sessionRef(name)
     return `https://sessiondirectory.xboxlive.com/serviceconfigs/${encodeURIComponent(ref.scid)}/sessionTemplates/${encodeURIComponent(ref.templateName)}/sessions/${encodeURIComponent(ref.name)}`
   }
 
-  async getProfile (input) {
-    input = input === 'me' ? 'me' : isXuid(input) ? `xuids(${input})` : `gt(${encodeURIComponent(input)})`
-    const response = await this.get(`https://profile.xboxlive.com/users/${input}/settings`, { contractVersion: '2' })
-
+  async getProfile (identifier = 'me', options = {}) {
+    let user
+    if (identifier === 'me') user = 'me'
+    else if (typeof identifier?.xuid === 'string' && /^\d+$/.test(identifier.xuid) && identifier.gamertag === undefined) user = `xuids(${identifier.xuid})`
+    else if (typeof identifier?.gamertag === 'string' && identifier.xuid === undefined) user = `gt(${encodeURIComponent(identifier.gamertag)})`
+    else throw new TypeError('Expected me, { xuid }, or { gamertag }')
+    const response = await this.request('GET', `https://profile.xboxlive.com/users/${user}/settings`, { ...options, contractVersion: '2' })
     return response.profileUsers[0]
   }
 
-  async sendHandle (payload) {
-    this.requireSessionConfig()
-    return this.post('https://sessiondirectory.xboxlive.com/handles', {
-      data: payload,
+  async getActivityHandles (xuid, options = {}) {
+    this._sessionRef('')
+    const response = await this.request('POST', 'https://sessiondirectory.xboxlive.com/handles/query?include=relatedInfo,customProperties', {
+      ...options,
+      data: { type: 'activity', scid: this.options.scid, owners: { people: { moniker: 'people', monikerXuid: xuid } } },
       contractVersion: '107'
     })
-  }
-
-  async setActivity (sessionName) {
-    return this.sendHandle({
-      version: 1,
-      type: 'activity',
-      sessionRef: this.sessionRef(sessionName)
-    })
-  }
-
-  async sendInvite (sessionName, xuid) {
-    if (!this.options.titleId) throw new TypeError('Xbox invitations require titleId')
-    return this.sendHandle({
-      version: 1,
-      type: 'invite',
-      sessionRef: this.sessionRef(sessionName),
-      invitedXuid: xuid,
-      inviteAttributes: { titleId: this.options.titleId }
-    })
-  }
-
-  async getSessions (xuid) {
-    this.requireSessionConfig()
-    const response = await this.post('https://sessiondirectory.xboxlive.com/handles/query?include=relatedInfo,customProperties', {
-      data: {
-        type: 'activity',
-        scid: this.options.scid,
-        owners: {
-          people: {
-            moniker: 'people',
-            monikerXuid: xuid
-          }
-        }
-      },
-      contractVersion: '107'
-    })
-
     return response.results
   }
 
-  async getSession (sessionName) {
-    this.requireSessionConfig()
-    const response = await this.get(this.sessionUrl(sessionName), {
-      contractVersion: '107'
-    })
-
-    return response
+  getSession (name, options = {}) {
+    return this.request('GET', this._sessionUrl(name), { ...options, contractVersion: '107' })
   }
 
-  async updateSession (sessionName, payload) {
-    this.requireSessionConfig()
-    const response = await this.put(this.sessionUrl(sessionName), {
-      data: payload,
-      contractVersion: '107'
-    })
-
-    return response
+  updateSession (name, payload, options = {}) {
+    return this.request('PUT', this._sessionUrl(name), { ...options, data: payload, contractVersion: '107' })
   }
 
-  async addConnection (sessionName, xuid, connectionId, subscriptionId) {
-    const payload = {
-      members: {
-        me: {
-          constants: { system: { xuid, initialize: true } },
-          properties: {
-            system: { active: true, connection: connectionId, subscription: { id: subscriptionId, changeTypes: ['everything'] } }
-          }
-        }
-      }
-    }
-
-    await this.updateSession(sessionName, payload)
+  setActivity (name, options = {}) {
+    return this._sendHandle({ version: 1, type: 'activity', sessionRef: this._sessionRef(name) }, options)
   }
 
-  async updateConnection (sessionName, connectionId) {
-    const payload = {
-      members: { me: { properties: { system: { active: true, connection: connectionId } } } }
-    }
-
-    await this.updateSession(sessionName, payload)
+  sendInvite (name, xuid, options = {}) {
+    if (!this.options.titleId) throw new TypeError('Xbox invitations require titleId')
+    return this._sendHandle({
+      version: 1, type: 'invite', sessionRef: this._sessionRef(name), invitedXuid: xuid, inviteAttributes: { titleId: this.options.titleId }
+    }, options)
   }
 
-  async leaveSession (sessionName) {
-    await this.updateSession(sessionName, { members: { me: null } })
+  _sendHandle (data, options) {
+    return this.request('POST', 'https://sessiondirectory.xboxlive.com/handles', { ...options, data, contractVersion: '107' })
+  }
+
+  createSession (options = {}) {
+    return XboxSession.open(this, null, options)
+  }
+
+  joinSession (name, options = {}) {
+    if (typeof name !== 'string' || !name) throw new TypeError('Session name is required')
+    return XboxSession.open(this, name, options)
   }
 }
-
-module.exports = { XboxClient, isXuid }
+module.exports = { XboxClient }

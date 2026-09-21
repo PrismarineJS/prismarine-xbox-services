@@ -1,7 +1,8 @@
 /* eslint-env mocha */
-const assert = require('assert')
-const { XboxClient, SessionDirectory } = require('../')
-const title = { titleId: '123', scid: 'other-game-scid', templateName: 'OtherLobby' }
+const assert = require('assert/strict')
+const { EventEmitter } = require('events')
+const { XboxClient, XboxSession, XboxRTA } = require('..')
+const title = { titleId: '123', scid: 'example', templateName: 'Lobby', timeout: 500 }
 const auth = { getXboxToken: async () => ({ userHash: 'hash', XSTSToken: 'token' }) }
 const tick = () => new Promise(resolve => setImmediate(resolve))
 function deferred () {
@@ -9,259 +10,188 @@ function deferred () {
   const promise = new Promise(resolve => { complete = resolve })
   return { promise, resolve: complete }
 }
-function connectedSession () {
-  const session = new SessionDirectory(auth, title)
-  session.connect = async () => {
-    session.profile = { id: '12345' }
-    session.connectionId = 'connection'
-  }
-  return session
-}
 
-describe('experimental Xbox services', () => {
-  it('requires title configuration for managed sessions', () => {
-    assert.throws(() => new SessionDirectory(auth), /titleId/)
+describe('managed sessions', () => {
+  let originalFetch, connect, subscribe, requests, subscription, rta
+  beforeEach(() => {
+    originalFetch = global.fetch
+    connect = XboxRTA.prototype.connect
+    subscribe = XboxRTA.prototype.subscribe
+    requests = []
+    subscription = new EventEmitter()
+    subscription.data = { ConnectionId: 'connection' }
+    XboxRTA.prototype.connect = async function () { rta = this }
+    XboxRTA.prototype.subscribe = async () => subscription
+    global.fetch = async (url, options) => {
+      const body = options.body && JSON.parse(options.body)
+      requests.push({ url, ...options, body })
+      if (url.includes('profile.')) return new Response('{"profileUsers":[{"id":"12345"}]}')
+      if (options.method === 'GET') return new Response('{"properties":{"custom":{"game":"example"}}}')
+      return new Response(null, { status: 204 })
+    }
+  })
+  afterEach(() => {
+    global.fetch = originalFetch
+    XboxRTA.prototype.connect = connect
+    XboxRTA.prototype.subscribe = subscribe
   })
 
-  it('uses caller title configuration for handles and escapes session paths', async () => {
+  it('returns ready sessions with matching create/join APIs and no redundant property write', async () => {
     const client = new XboxClient(auth, title)
-    const requests = []
-    client.post = client.put = client.get = async (url, config) => { requests.push({ url, ...config }); return { profileUsers: [{ id: '12345' }] } }
-    await client.sendInvite('my session', '12345')
-    assert.deepStrictEqual(requests[0].data.sessionRef, { scid: title.scid, templateName: title.templateName, name: 'my session' })
-    assert.strictEqual(requests[0].data.inviteAttributes.titleId, title.titleId)
-    await client.updateSession('path/segment', {})
-    assert(requests[1].url.endsWith('/OtherLobby/sessions/path%2Fsegment'))
-    await client.getProfile('12345')
-    assert(requests[2].url.includes('xuids(12345)'))
-  })
-
-  it('publishes caller properties with the managed Xbox membership', async () => {
-    const session = connectedSession()
-    const writes = []
-    const properties = { system: { closed: false }, custom: { game: 'other-game' } }
-    session.client.updateSession = async (name, payload) => { writes.push(payload) }
-    session.client.setActivity = async () => {}
-    session.client.getSession = async () => ({ properties })
-    await session.createSession(({ profile }) => ({ ...properties, custom: { ...properties.custom, owner: profile.id } }))
-    assert.deepStrictEqual(writes[0].properties.custom, { game: 'other-game', owner: '12345' })
-    assert.strictEqual(writes[0].members.me.properties.system.connection, 'connection')
-    assert.strictEqual(writes[0].members.me.constants.system.xuid, '12345')
-    assert.strictEqual(writes[0].properties.custom.SupportedConnections, undefined)
-    await session.end()
-  })
-
-  it('cancels only the ending session and permits a bounded leave request', async () => {
-    const originalFetch = global.fetch
-    try {
-      global.fetch = (url, options) => options.body === '{"members":{"me":null}}'
-        ? Promise.resolve(new Response(null, { status: 204 }))
-        : new Promise(() => {})
-      const first = new SessionDirectory(auth, title)
-      const second = new SessionDirectory(auth, title)
-      first.name = 'first'
-      const cancelled = assert.rejects(first.client.get('https://example.com'), /cancelled/)
-      const controller = new AbortController()
-      const independent = assert.rejects(second.client.get('https://example.com', { signal: controller.signal }), /independent/)
-      await first.end()
-      await cancelled
-      assert.strictEqual(second.client.requests.size, 1)
-      controller.abort(new Error('independent'))
-      await independent
-      await second.end()
-    } finally { global.fetch = originalFetch }
-  })
-
-  it('leaves again if an in-flight join completes after end', async () => {
-    const session = connectedSession()
-    const pending = deferred()
-    let leaves = 0
-    session.client.addConnection = () => pending.promise
-    session.client.leaveSession = async () => { leaves++ }
-    session.client.setActivity = async () => { assert.fail('must not publish a closed session') }
-    const joining = assert.rejects(session.joinSession('example'), /session is closed/)
-    await tick()
-    await session.end()
-    pending.resolve()
-    await joining
-    assert.strictEqual(leaves, 2)
-  })
-
-  it('leaves again if an in-flight update completes after end', async () => {
-    const session = connectedSession()
-    session.name = 'example'
-    const pending = deferred()
-    let leaves = 0
-    session.client.updateSession = () => pending.promise
-    session.client.leaveSession = async () => { leaves++ }
-    const updating = assert.rejects(session.updateSession({}), /session is closed/)
-    await session.end()
-    pending.resolve()
-    await updating
-    assert.strictEqual(leaves, 2)
-  })
-
-  it('ends once and delegates RTA shutdown', async () => {
-    const session = connectedSession()
-    let destroyed = 0
-    session.rta = {
-      destroy: async () => { destroyed++ }
+    for (const create of [true, false]) {
+      requests.length = 0
+      const session = create
+        ? await client.createSession({ properties: ({ profile }) => ({ custom: { owner: profile.id } }) })
+        : await client.joinSession('existing')
+      assert(session instanceof XboxSession)
+      assert.equal(session.state, 'open')
+      const writes = requests.filter(request => request.method === 'PUT')
+      assert.equal(writes.length, 1)
+      assert.equal(writes[0].body.members.me.properties.system.connection, 'connection')
+      assert.equal(writes[0].body.properties?.custom.owner, create ? '12345' : undefined)
+      assert.equal((await session.get()).properties.custom.game, 'example')
+      await session.close()
+      assert.equal(session.state, 'closed')
     }
-    const ending = session.end()
-    assert.strictEqual(session.end(), ending)
-    await ending
-    assert.strictEqual(destroyed, 1)
   })
-  it('terminates a lost Xbox session and reports the failure instead of calling a nonexistent restart', async () => {
-    const session = new SessionDirectory({}, title)
-    session.name = 'joined-world'
-    session._ready = true
-    let destroyed = false
-    let left = false
-    session.rta = { destroy: async () => { destroyed = true } }
-    session.client.updateSession = async () => { throw new Error('session gone') }
-    session.client.leaveSession = async () => { left = true }
-    let failure
-    session.on('error', error => { failure = error })
-    await session.onSubscribe({ data: { ConnectionId: 'new-connection' } })
+
+  it('updates only properties, supports explicit gamertags, and leaves once', async () => {
+    const session = await new XboxClient(auth, title).createSession()
+    await session.updateProperties({ custom: { members: 'data' } })
+    assert.deepEqual(requests.at(-1).body, { properties: { custom: { members: 'data' } } })
+    await session.invite({ gamertag: '12345' })
+    assert(requests.at(-2).url.includes('gt(12345)'))
+    assert.equal(requests.at(-1).body.invitedXuid, '12345')
+    const count = requests.length
+    await session.invite({ xuid: '98765' })
+    assert.equal(requests.length, count + 1)
+    assert.equal(requests.at(-1).body.invitedXuid, '98765')
+    const closing = session.close()
+    assert.equal(session.close(), closing)
+    await closing
+    assert.equal(requests.filter(r => r.body?.members?.me === null).length, 1)
+    await assert.rejects(session.get(), /not open/)
+  })
+
+  it('does not require invitation title ID for session membership', async () => {
+    const session = await new XboxClient(auth, { scid: 'example', templateName: 'Lobby' }).joinSession('existing')
+    await assert.rejects(session.invite({ xuid: '123' }), /titleId/)
+    await session.close()
+  })
+
+  it('rejects before any request when startup is already cancelled', async () => {
+    const controller = new AbortController()
+    controller.abort(new Error('cancelled'))
+    await assert.rejects(new XboxClient(auth, title).createSession({ signal: controller.signal }), /cancelled/)
+    assert.equal(requests.length, 0)
+  })
+
+  it('uses a single startup deadline, including asynchronous properties', async () => {
+    const properties = deferred()
+    const creating = new XboxClient(auth, title).createSession({ timeout: 20, properties: () => properties.promise })
+    await assert.rejects(creating, /timed out/)
+    properties.resolve({})
     await tick()
-    assert.strictEqual(destroyed, true)
-    assert.strictEqual(left, true)
-    assert.match(failure.message, /session connection was lost/)
-    await assert.rejects(session.joinSession('another-world'), /session is closed/)
-  })
-})
-
-describe('managed RTA lifecycle', () => {
-  it('rejects concurrent and repeated starts without replacing the session', async () => {
-    const session = connectedSession()
-    const pending = deferred()
-    session.connect = async () => { await pending.promise; session.profile = { id: '123' }; session.connectionId = 'connection' }
-    session.client.addConnection = async () => {}
-    session.client.setActivity = async () => {}
-    session.client.getSession = async () => ({ properties: {} })
-    const first = session.joinSession('first')
-    await assert.rejects(session.createSession(), /already started/)
-    assert.strictEqual(session.name, 'first')
-    pending.resolve()
-    await first
-    await assert.rejects(session.joinSession('second'), /already started/)
-    session.client.leaveSession = async () => {}
-    await session.end()
+    assert.equal(requests.filter(r => r.method === 'PUT').length, 0)
+    assert.equal(rta.closed, true)
   })
 
-  it('automatically cleans up a failed start', async () => {
-    const session = new SessionDirectory(auth, title)
-    session.client.getProfile = async () => { throw new Error('profile unavailable') }
-    session.client.leaveSession = async () => {}
-    await assert.rejects(session.joinSession('example'), /profile unavailable/)
-    assert.strictEqual(session._ended, true)
-    await session.end()
-  })
-
-  it('handles real RTA error events during subscription without throwing', async () => {
-    const { XboxRTA } = require('../')
-    const originalConnect = XboxRTA.prototype.connect
-    const originalSubscribe = XboxRTA.prototype.subscribe
-    try {
-      XboxRTA.prototype.connect = async () => {}
-      XboxRTA.prototype.subscribe = async function () {
-        assert.doesNotThrow(() => this.emit('error', new Error('subscription failed')))
-        throw new Error('subscription failed')
+  it('cancels after membership starts and uses a fresh signal for cleanup', async () => {
+    const fetch = global.fetch
+    const controller = new AbortController()
+    global.fetch = async (url, options) => {
+      const body = options.body && JSON.parse(options.body)
+      if (body?.members?.me) {
+        controller.abort(new Error('cancel startup'))
+        return new Promise(() => {})
       }
-      const session = new SessionDirectory(auth, title)
-      session.client.getProfile = async () => ({ id: '123' })
-      session.client.leaveSession = async () => {}
-      await assert.rejects(session.joinSession('example'), /subscription failed/)
-      assert.strictEqual(session._ended, true)
-    } finally {
-      XboxRTA.prototype.connect = originalConnect
-      XboxRTA.prototype.subscribe = originalSubscribe
+      return fetch(url, options)
     }
+    await assert.rejects(new XboxClient(auth, title).createSession({ signal: controller.signal }), /cancel startup/)
+    const leave = requests.find(r => r.body?.members?.me === null)
+    assert(leave)
+    assert.equal(leave.signal.aborted, false)
   })
 
-  it('forwards established RTA errors and closes the session', async () => {
-    const { XboxRTA } = require('../')
-    const originalConnect = XboxRTA.prototype.connect
-    const originalSubscribe = XboxRTA.prototype.subscribe
-    try {
-      XboxRTA.prototype.connect = async () => {}
-      XboxRTA.prototype.subscribe = async () => ({ data: { ConnectionId: 'connection' } })
-      const session = new SessionDirectory(auth, title)
-      session.client.getProfile = async () => ({ id: '123' })
-      session.client.addConnection = session.client.setActivity = session.client.leaveSession = async () => {}
-      session.client.getSession = async () => ({ properties: {} })
-      await session.joinSession('example')
-      const failure = new Promise(resolve => session.once('error', resolve))
-      session.rta.emit('error', new Error('connection lost'))
-      assert.match((await failure).message, /connection lost/)
-      assert.strictEqual(session._ended, true)
-    } finally {
-      XboxRTA.prototype.connect = originalConnect
-      XboxRTA.prototype.subscribe = originalSubscribe
+  it('isolates cancellation between sessions and the parent client', async () => {
+    const client = new XboxClient(auth, title)
+    const first = await client.createSession()
+    const second = await client.createSession()
+    const fetch = global.fetch
+    global.fetch = async (url, options) => options.method === 'GET' ? new Promise(() => {}) : fetch(url, options)
+    const pending = assert.rejects(first.get(), /closed/)
+    await first.close()
+    await pending
+    global.fetch = fetch
+    assert.equal((await second.get()).properties.custom.game, 'example')
+    assert.equal((await client.getProfile()).id, '12345')
+    await second.close()
+  })
+
+  it('serializes subscription refreshes and reports a terminal close once', async () => {
+    const session = await new XboxClient(auth, title).joinSession('existing')
+    subscription.emit('ready', { ConnectionId: 'replacement' })
+    await tick()
+    assert(requests.some(r => r.body?.members?.me?.properties?.system?.connection === 'replacement'))
+    const failure = new Promise(resolve => session.once('error', resolve))
+    rta.onClose(1000, 'shutdown')
+    assert.match((await failure).message, /shutdown/)
+    assert.equal(session.state, 'closed')
+  })
+
+  it('does not emit a duplicate error for a rejected explicit operation', async () => {
+    const session = await new XboxClient(auth, title).createSession()
+    let errors = 0
+    session.on('error', () => { errors++ })
+    const fetch = global.fetch
+    global.fetch = async () => new Response('failed', { status: 503 })
+    await assert.rejects(session.get(), /503/)
+    assert.equal(errors, 0)
+    global.fetch = fetch
+    await session.close()
+  })
+  it('allows a longer per-operation deadline and does not retain startup cancellation', async () => {
+    const fetch = global.fetch
+    global.fetch = async (url, options) => {
+      if (url.includes('profile.')) await new Promise(resolve => setTimeout(resolve, 25))
+      return fetch(url, options)
     }
+    const controller = new AbortController()
+    const session = await new XboxClient(auth, { ...title, timeout: 5 }).createSession({ timeout: 200, signal: controller.signal })
+    controller.abort()
+    global.fetch = fetch
+    assert.equal((await session.get()).properties.custom.game, 'example')
+    await session.close()
   })
 
-  it('does not publish activity after closing during a subscription refresh', async () => {
-    const session = connectedSession()
-    session.name = 'example'
-    session._ready = true
-    const pending = deferred()
-    session.client.updateSession = () => pending.promise
-    session.client.leaveSession = async () => {}
-    session.client.setActivity = async () => { assert.fail('must not publish after end') }
-    const refresh = session.onSubscribe({ data: { ConnectionId: 'new' } })
-    await session.end()
-    pending.resolve()
-    await refresh
-  })
-})
-
-describe('RTA startup integration', () => {
-  for (const cancel of [false, true]) {
-    it(`${cancel ? 'cancels' : 'times out'} RTA authentication without a late nonce request`, async () => {
-      const originalFetch = global.fetch
-      const token = deferred()
-      let fetched = false
-      global.fetch = async () => { fetched = true; throw new Error('unexpected fetch') }
-      try {
-        const session = new SessionDirectory({ getXboxToken: () => token.promise }, { ...title, timeout: 10 })
-        session.client.getProfile = async () => ({ id: '123' })
-        session.client.leaveSession = async () => {}
-        const joining = assert.rejects(session.joinSession('example'), cancel ? /closed/ : /timed out/)
-        await tick()
-        if (cancel) await session.end()
-        await joining
-        token.resolve({ userHash: 'hash', XSTSToken: 'token' })
-        await tick()
-        assert.strictEqual(fetched, false)
-        assert.strictEqual(session._ended, true)
-        assert.strictEqual(session.rta.ws, null)
-      } finally { global.fetch = originalFetch }
+  it('preserves a replacement connection received during startup', async () => {
+    const session = await new XboxClient(auth, title).createSession({
+      properties: () => {
+        subscription.emit('ready', { ConnectionId: 'reconnected-during-start' })
+        return {}
+      }
     })
-  }
-})
+    const writes = requests.filter(r => r.body?.members?.me)
+    assert.equal(writes.at(-1).body.members.me.properties.system.connection, 'reconnected-during-start')
+    await session.close()
+  })
 
-describe('managed session server closure', () => {
-  it('ends an established session when RTA closes without reconnecting', async () => {
-    const { XboxRTA } = require('../')
-    const originalConnect = XboxRTA.prototype.connect
-    const originalSubscribe = XboxRTA.prototype.subscribe
-    try {
-      XboxRTA.prototype.connect = async () => {}
-      XboxRTA.prototype.subscribe = async () => ({ data: { ConnectionId: 'connection' } })
-      const session = new SessionDirectory(auth, title)
-      session.client.getProfile = async () => ({ id: '123' })
-      session.client.addConnection = session.client.setActivity = session.client.leaveSession = async () => {}
-      session.client.getSession = async () => ({ properties: {} })
-      await session.joinSession('example')
-      const failure = new Promise(resolve => session.once('error', resolve))
-      session.rta.onClose(1000, 'server shutdown')
-      assert.match((await failure).message, /server shutdown/)
-      assert.equal(session._ended, true)
-    } finally {
-      XboxRTA.prototype.connect = originalConnect
-      XboxRTA.prototype.subscribe = originalSubscribe
+  it('rejects startup RTA failures without an unhandled error event', async () => {
+    XboxRTA.prototype.subscribe = async function () {
+      this.emit('error', new Error('transport failed'))
+      throw new Error('transport failed')
     }
+    await assert.rejects(new XboxClient(auth, title).createSession(), /transport failed/)
+    assert.equal(rta.closed, true)
+  })
+
+  it('bounds cleanup separately and preserves the original startup failure', async () => {
+    global.fetch = async (url, options) => {
+      if (url.includes('profile.')) return new Response('{"profileUsers":[{"id":"123"}]}')
+      if (options.body === '{"members":{"me":null}}') return new Promise(() => {})
+      return new Response('membership failed', { status: 503 })
+    }
+    await assert.rejects(new XboxClient(auth, { ...title, cleanupTimeout: 10 }).createSession(), /membership failed/)
+    assert.equal(rta.closed, true)
   })
 })

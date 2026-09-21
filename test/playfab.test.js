@@ -1,6 +1,6 @@
 /* eslint-env mocha */
 const assert = require('assert/strict')
-const { PlayFabClient } = require('..')
+const { PlayFabClient, ServiceError } = require('..')
 const credentials = async () => ({ SessionTicket: 'ticket', EntityToken: { EntityToken: 'entity' } })
 
 describe('PlayFab service requests', () => {
@@ -40,10 +40,12 @@ describe('PlayFab service requests', () => {
     const client = new PlayFabClient(credentials, { titleId: 'ABC' })
     global.fetch = async () => new Response(JSON.stringify({ error: 'InvalidSessionTicket', errorCode: 1100, errorMessage: 'expired', errorDetails: { ticket: ['expired'] } }), { status: 400 })
     await assert.rejects(client.request('Client/GetAccountInfo'), error => {
+      assert(error instanceof ServiceError)
+      assert.equal(error.service, 'PlayFab')
       assert.equal(error.status, 400)
-      assert.equal(error.error, 'InvalidSessionTicket')
+      assert.equal(error.code, 'InvalidSessionTicket')
       assert.equal(error.errorCode, 1100)
-      assert.deepEqual(error.errorDetails, { ticket: ['expired'] })
+      assert.deepEqual(error.details, { ticket: ['expired'] })
       return true
     })
     global.fetch = async () => new Response('unavailable', { status: 503 })

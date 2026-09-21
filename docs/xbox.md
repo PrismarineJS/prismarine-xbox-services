@@ -1,88 +1,76 @@
 # Xbox clients (experimental)
 
-Accepts an existing prismarine-auth Authflow or an object implementing `getXboxToken()`.
+Create an XboxClient from an existing prismarine-auth Authflow (or a compatible
+`getXboxToken()` provider). Credentials and their refresh remain provider-owned.
 
 ```js
-const { Authflow } = require('prismarine-auth')
-const { XboxClient, SessionDirectory } = require('prismarine-xbox-services')
-const auth = new Authflow(username, cacheDirectory, authOptions)
-const title = { titleId, scid, templateName, timeout: 15000 }
-const xbox = new XboxClient(auth, title)
-const profile = await xbox.getProfile('me')
-const handles = await xbox.getSessions(profile.id)
-
-const session = new SessionDirectory(auth, title)
-session.on('error', console.error)
+const { XboxClient } = require('prismarine-xbox-services')
+const xbox = new XboxClient(auth, { titleId, scid, templateName })
+const session = await xbox.createSession({
+  properties: ({ profile }) => ({ custom: { owner: profile.id, ...worldMetadata } }),
+  signal
+})
+session.on('error', handleError)
 try {
-  await session.createSession(({ profile }) => ({
-    system: { joinRestriction: 'followed', readRestriction: 'followed', closed: false },
-    custom: { owner: profile.id, gameMode: 'example' }
-  }))
-  await session.invitePlayer('SomeGamertag')
-  // Keep the session alive for as long as the application needs it.
+  await session.invite({ xuid: friendXuid })
+  await session.updateProperties({ custom: updatedMetadata })
+  const document = await session.get()
 } finally {
-  await session.end()
+  await session.close()
 }
 ```
 
-The example assumes caller-provided credentials/options and a title with an existing Xbox
-service configuration and session template. It does not provision a title or bypass service
-permissions. Minecraft consumers construct their Minecraft properties in their own package.
-
 ## XboxClient
 
-`new XboxClient(authflow, options = {})` accepts `titleId`, `scid`, `templateName` and
-`timeout` (milliseconds, default 15000). Profile and generic HTTP calls do not require title
-configuration; session operations require SCID/template, and invitations also require title ID.
+`new XboxClient(auth, { titleId, scid, templateName, timeout = 15000, cleanupTimeout = 5000 } = {})`.
+Profiles and raw requests need no title configuration. Session operations require SCID and
+template; invitations additionally require the title ID.
 
-- `getProfile(identifier)`: `me`, a decimal XUID string, or a gamertag. All-decimal strings
-  are interpreted as XUIDs. Returns the first profile entry.
-- `getSessions(xuid)`: activity handles for this SCID and user.
-- `getSession(name)`, `updateSession(name, payload)`: read/update the configured session.
-- `setActivity(name)`, `sendInvite(name, xuid)`, `leaveSession(name)`: publish activity,
-  invite another user, or remove the authenticated member.
-- `get`, `post`, `put`, `delete`: `(url, { data, headers, contractVersion, timeout, signal })`.
-  These methods attach Xbox authorization credentials; supply trusted Xbox service URLs. Redirects are rejected.
-- `abortPending()`: cancel this client's current requests. Later requests remain possible.
+- `getProfile(identifier = 'me', options)`: accepts `'me'`, `{ xuid: '123' }`, or
+  `{ gamertag: 'SomePlayer' }`. Numeric gamertags are never guessed to be XUIDs.
+- `getActivityHandles(xuid, options)`: returns activity handles for the configured SCID,
+  including their `sessionRef`; these are not full session documents.
+- `createSession({ properties, timeout, signal } = {})`: creates membership and publishes
+  activity, then returns a ready XboxSession. `properties` may be an object or an async
+  `({ profile }) => properties` callback; Minecraft-specific properties belong in the caller.
+- `joinSession(name, options)`: joins membership and publishes activity; returns the same
+  XboxSession API. Obtain the session document with `session.get()` if needed.
+- `getSession(name, options)`, `updateSession(name, payload, options)`: raw document operations.
+- `setActivity(name, options)`, `sendInvite(name, xuid, options)`: raw handle operations.
+- `request(method, url, { data, headers, contractVersion, timeout, signal })`: authenticated
+  JSON request. Supply trusted Xbox service URLs; redirects are rejected.
+- `abortPending()`: cancels current HTTP requests using this client, including managed sessions'
+  HTTP requests. It does not close sessions or prevent future calls; use session.close() for teardown.
 
-HTTP calls use `Authflow.getXboxToken('http://xboxlive.com')`. Bodies are JSON; empty successful
-responses return `undefined`. Large JSON numeric IDs are returned as strings to avoid rounding;
-smaller numbers remain numbers. HTTP failures expose `error.status` and `error.body` in addition
-to a descriptive message. Writes are not automatically retried.
+Options on individual operations are `{ timeout, signal }`. HTTP bodies preserve large numeric
+IDs as strings, accept empty successful responses as undefined, and expose failures as
+`ServiceError` with `service`, `status`, and raw `body`. Requests are not automatically retried.
 
-The deadline covers authentication, fetch and body reading. Cancellation stops waiting for auth
-and prevents a late HTTP request; it cannot cancel the shared authentication flow itself.
+## XboxSession
 
-## SessionDirectory
+Instances come from the client factories. They expose `name`, read-only lifecycle `state`,
+`get(options)`, `updateProperties(properties, options)`, `invite(identifier, options)` and `close()`.
+Update payloads are wrapped in the session's `properties`; managed membership fields are not
+part of this operation. Raw document updates remain available on XboxClient and require care
+if they modify managed membership.
 
-`new SessionDirectory(authflow, { titleId, scid, templateName, timeout })` requires title
-configuration and creates a private XboxClient, exposed as `session.client`. Sharing an Authflow
-between sessions shares credentials, not request cancellation.
+Each operation has one deadline covering all of its steps, including credentials, RTA startup,
+property callbacks and HTTP bodies. A caller signal cancels that operation, not the lifetime
+of a successfully returned session. Closing a session cancels its ongoing work through its own
+lifetime signal; other sessions and direct client requests are unaffected.
 
-- `createSession(properties = {})`: generate a UUID name, connect to RTA, create membership,
-  and publish activity. Properties can be an object or a synchronous `({ profile }) => properties`
-  callback evaluated after the owner profile is available. The callback supplies the session
-  `properties` object only; the managed API supplies `members.me` connection/subscription data.
-- `joinSession(name)`: connect RTA, add the authenticated member, publish activity, and return
-  the session document.
-- `getSession()`, `updateSession(payload)`, `invitePlayer(identifier)`: operate on the current
-  session. Updates are raw Xbox session patches; callers must preserve managed member fields.
-- `end()`: idempotent teardown; stop new lifecycle work, cancel the private client's requests,
-  close RTA, then attempt a bounded leave request. Leave failures are debug-logged. A late join
-  or update completion triggers another leave attempt rather than publishing an ended session.
-- `error`: asynchronous subscription/update failures. Register a listener and catch rejected
-  promises from explicit operations. Failed create/join operations automatically end the session; explicit cleanup remains idempotent.
+`close()` is idempotent and terminal. It closes RTA, then attempts to leave if membership was
+attempted. Cleanup has a separate deadline (`cleanupTimeout`); failed leave requests are
+best-effort and debug-logged. Cancellation cannot undo a request already applied remotely.
+A write that is observed completing after closure triggers another leave attempt.
 
-Use one SessionDirectory per joined/hosted session. Repeated or concurrent create/join attempts
-are rejected without replacing the active connection. RTA startup uses the configured timeout
-(default 15 seconds) through authentication, nonce retrieval and WebSocket opening. Ending the
-session cancels startup and pending subscriptions, including a stalled WebSocket handshake.
-Startup failures reject the create/join promise; established RTA failures emit `error` after cleanup. Calls to its low-level `client` are not
-prevented after `end()`; the owner is responsible for not starting new work on an ended session.
-The session name, profile, connectionId, and rta can be inspected; request bookkeeping is internal. Diagnostics use
-`DEBUG=prismarine-xbox-services:session`.
+Explicit operation failures reject their promises. Startup failures clean up before rejecting.
+Background connection/refresh failures close the session and emit `error`; register a listener.
+Reconnection updates are serialized and never overwrite application-owned properties.
 
-The initial extraction retains the existing create-and-publish behavior from bedrock-protocol.
-Further API changes can be reviewed while experimental. Service boundary tests use mocked
-responses; live authenticated sessions still need integration testing before claiming support
-for additional titles.
+Creation uses one membership PUT followed by activity publication. It no longer reads and
+writes the same properties back. Microsoft's [MPSD overview](https://learn.microsoft.com/en-us/gaming/gdk/docs/services/multiplayer/mpsd/live-mpsd-overview)
+describes session creation through the initial PUT; no requirement for the extra write was
+identified. Live title-specific integration remains necessary to validate this behavior.
+
+Diagnostics: `DEBUG=prismarine-xbox-services:session`. Fields prefixed with `_` are internal.
