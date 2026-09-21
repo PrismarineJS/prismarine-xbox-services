@@ -34,12 +34,14 @@ class XboxClient extends JsonClient {
     else if (typeof identifier?.xuid === 'string' && /^\d+$/.test(identifier.xuid) && identifier.gamertag === undefined) user = `xuids(${identifier.xuid})`
     else if (typeof identifier?.gamertag === 'string' && identifier.xuid === undefined) user = `gt(${encodeURIComponent(identifier.gamertag)})`
     else throw new TypeError('Expected me, { xuid }, or { gamertag }')
-    const response = await this.request('GET', `https://profile.xboxlive.com/users/${user}/settings`, { ...options, contractVersion: '2' })
-    return response.profileUsers[0]
+    const response = await this.request('GET', `https://profile.xboxlive.com/users/${user}/settings?settings=Gamertag,GameDisplayName,GameDisplayPicRaw`, { ...options, contractVersion: '2' })
+    const profile = response.profileUsers[0]
+    const settings = Object.fromEntries((profile.settings || []).map(({ id, value }) => [id, value]))
+    return { xuid: String(profile.id), gamertag: settings.Gamertag, displayName: settings.GameDisplayName, avatarUrl: settings.GameDisplayPicRaw }
   }
 
   async getActivityHandles (xuid, options = {}) {
-    this._sessionRef('')
+    if (!this.options.scid) throw new TypeError('Xbox activity lookup requires scid')
     const response = await this.request('POST', 'https://sessiondirectory.xboxlive.com/handles/query?include=relatedInfo,customProperties', {
       ...options,
       data: { type: 'activity', scid: this.options.scid, owners: { people: { moniker: 'people', monikerXuid: xuid } } },
@@ -72,6 +74,7 @@ class XboxClient extends JsonClient {
   }
 
   createSession (options = {}) {
+    if (options.name !== undefined && (typeof options.name !== 'string' || !options.name)) throw new TypeError('Session name is required')
     return XboxSession.open(this, null, options)
   }
 

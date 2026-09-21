@@ -20,3 +20,13 @@ adapter, but replace inheritance with a factory that calls `xbox.createSession({
 World discovery uses the client directly. Join callers obtain the document with `session.get()`.
 The protocol's shutdown path calls `session.close()`. This package revision does not edit or
 merge the Bedrock consumer PR or change prismarine-auth's APIs.
+
+## Profile and managed-session changes
+
+`getProfile()` now returns `{ xuid, gamertag, displayName, avatarUrl }`; replace `profile.id`
+with `profile.xuid`, including property callbacks. Raw settings remain available via `request()`.
+Creation accepts an optional `name`. Both creation and joining now read the initial snapshot,
+available as `session.current`, and report subsequent changes through session events.
+Call `await session.setActivity()` explicitly after creation/joining when activity publication
+is desired; it is no longer automatic. Keep that call inside the consumer's cleanup scope.
+The existing XboxClient, XboxSession, XboxRTA and PlayFabClient classes remain.

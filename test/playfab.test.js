@@ -72,6 +72,30 @@ describe('PlayFab service requests', () => {
     await new Promise(resolve => setImmediate(resolve))
   })
 
+  it('maps service helpers to session-ticket APIs and preserves CloudScript results', async () => {
+    const calls = []
+    global.fetch = async (url, options) => {
+      calls.push([new URL(url).pathname, JSON.parse(options.body)])
+      assert.equal(options.headers['X-Authorization'], 'ticket')
+      assert.equal(options.headers['X-EntityToken'], undefined)
+      return new Response('{"data":{"Error":{"Error":"ScriptError","Message":"script failed"}}}')
+    }
+    const client = new PlayFabClient(() => ({ SessionTicket: 'ticket' }), { titleId: 'ABC' })
+    await client.getTitleData({ keys: ['ServerList'] })
+    await client.getUserInventory()
+    const result = await client.executeCloudScript({ functionName: 'Run', functionParameter: { count: 2 }, generatePlayStreamEvent: false })
+    assert.equal(result.Error.Error, 'ScriptError')
+    assert.deepEqual(calls, [
+      ['/Client/GetTitleData', { Keys: ['ServerList'] }],
+      ['/Client/GetUserInventory', {}],
+      ['/Client/ExecuteCloudScript', { FunctionName: 'Run', FunctionParameter: { count: 2 }, GeneratePlayStreamEvent: false }]
+    ])
+    const controller = new AbortController()
+    controller.abort(new Error('cancelled'))
+    await assert.rejects(client.getTitleData({}, { signal: controller.signal }), /cancelled/)
+    assert.equal(calls.length, 3)
+  })
+
   it('cancels pending work and allows later requests', async () => {
     const client = new PlayFabClient(credentials, { titleId: 'ABC' })
     global.fetch = async () => new Promise(() => {})

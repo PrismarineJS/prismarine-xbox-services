@@ -4,7 +4,12 @@ import { XboxClient, XboxSession, XboxRTA, PlayFabClient, ServiceError } from '.
 async function example () {
   const auth = new Authflow('example')
   const client = new XboxClient(auth, { titleId: '123', scid: 'example', templateName: 'Lobby' })
-  const session = await client.createSession({ properties: ({ profile }) => ({ custom: { owner: profile.id } }) })
+  const session = await client.createSession({ name: 'example', properties: ({ profile }) => ({ custom: { owner: profile.xuid } }) })
+  await session.setActivity()
+  session.on('memberJoin', member => console.log(member.constants?.system?.xuid))
+  session.on('propertiesChanged', properties => console.log(properties.custom))
+  session.on('changed', (current, previous) => console.log(current.members, previous.members))
+  console.log(session.current.properties)
   await session.invite({ gamertag: '12345' })
   await session.updateProperties({ custom: { game: 'example' } })
   await session.get({ signal: new AbortController().signal })
@@ -24,6 +29,9 @@ async function example () {
   await sub.close()
   await rta.close()
   const playfab = new PlayFabClient(() => ({ SessionTicket: 'ticket' }), { titleId: 'ABC' })
+  await playfab.getTitleData({ keys: ['ServerList'] })
+  await playfab.getUserInventory()
+  await playfab.executeCloudScript({ functionName: 'Run', functionParameter: {} })
   await playfab.request('Client/GetAccountInfo').catch(error => {
     if (error instanceof ServiceError) console.log(error.code, error.status)
   })

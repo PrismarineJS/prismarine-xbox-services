@@ -10,6 +10,24 @@ describe('Xbox HTTP requests', () => {
   beforeEach(() => { originalFetch = global.fetch })
   afterEach(() => { global.fetch = originalFetch })
 
+  it('normalizes profile settings and preserves a large XUID', async () => {
+    global.fetch = async url => {
+      assert.equal(new URL(url).searchParams.get('settings'), 'Gamertag,GameDisplayName,GameDisplayPicRaw')
+      return new Response('{"profileUsers":[{"id":18446744073709551615,"settings":[{"id":"Gamertag","value":"Player"},{"id":"GameDisplayName","value":"Display"},{"id":"GameDisplayPicRaw","value":"https://example.com/avatar"}]}]}')
+    }
+    assert.deepStrictEqual(await new XboxClient(auth).getProfile(), {
+      xuid: '18446744073709551615', gamertag: 'Player', displayName: 'Display', avatarUrl: 'https://example.com/avatar'
+    })
+  })
+
+  it('looks up activity with just a SCID', async () => {
+    global.fetch = async (url, { body }) => {
+      assert.strictEqual(JSON.parse(body).scid, 'example')
+      return new Response('{"results":[]}')
+    }
+    assert.deepStrictEqual(await new XboxClient(auth, { scid: 'example' }).getActivityHandles('123'), [])
+  })
+
   it('accepts empty successful responses, including 204', async () => {
     for (const status of [200, 204]) {
       global.fetch = async () => new Response(null, { status })

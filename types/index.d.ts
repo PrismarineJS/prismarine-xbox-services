@@ -22,14 +22,22 @@ export interface RequestOptions extends OperationOptions {
   contractVersion?: string
 }
 export interface Profile {
-  id: string
-  [key: string]: unknown
+  xuid: string
+  gamertag?: string
+  displayName?: string
+  avatarUrl?: string
 }
 export interface SessionProperties {
   system?: Record<string, unknown>
   custom?: Record<string, unknown>
 }
+export interface SessionMember {
+  constants?: { system?: { xuid?: string; [key: string]: unknown }; [key: string]: unknown }
+  properties?: Record<string, unknown>
+  [key: string]: unknown
+}
 export interface SessionDocument {
+  members?: Record<string, SessionMember>
   properties: SessionProperties
   [key: string]: unknown
 }
@@ -43,6 +51,7 @@ export interface ActivityHandle {
   [key: string]: unknown
 }
 export interface CreateSessionOptions extends OperationOptions {
+  name?: string
   properties?: SessionProperties | ((context: { profile: Profile }) => SessionProperties | Promise<SessionProperties>)
 }
 export class XboxClient {
@@ -58,10 +67,18 @@ export class XboxClient {
   createSession(options?: CreateSessionOptions): Promise<XboxSession>
   joinSession(name: string, options?: OperationOptions): Promise<XboxSession>
 }
-export class XboxSession extends EventEmitter {
+export class XboxSession extends EventEmitter<{
+  changed: [current: SessionDocument, previous: SessionDocument]
+  memberJoin: [member: SessionMember]
+  memberLeave: [member: SessionMember]
+  propertiesChanged: [properties: SessionProperties]
+  error: [error: Error]
+}> {
   private constructor()
   readonly name: string
   readonly state: 'opening' | 'open' | 'closing' | 'closed'
+  readonly current: SessionDocument
+  setActivity(options?: OperationOptions): Promise<void>
   get(options?: OperationOptions): Promise<SessionDocument>
   updateProperties(properties: SessionProperties, options?: OperationOptions): Promise<void>
   invite(identifier: UserIdentifier, options?: OperationOptions): Promise<void>
@@ -107,8 +124,26 @@ export interface PlayFabOptions {
 export interface PlayFabRequestOptions extends OperationOptions {
   auth?: 'session' | 'entity'
 }
+export interface CloudScriptOptions {
+  functionName: string
+  functionParameter?: unknown
+  generatePlayStreamEvent?: boolean
+}
+export interface CloudScriptResult {
+  FunctionResult?: unknown
+  Error?: { Error?: string; Message?: string; StackTrace?: string }
+  [key: string]: unknown
+}
+export interface InventoryResult {
+  Inventory?: Array<Record<string, unknown>>
+  VirtualCurrency?: Record<string, number>
+  [key: string]: unknown
+}
 export class PlayFabClient {
   constructor(getCredentials: () => PlayFabCredentials | Promise<PlayFabCredentials>, options: PlayFabOptions)
+  getTitleData(data?: { keys?: string[] }, options?: OperationOptions): Promise<{ Data?: Record<string, string> } | undefined>
+  getUserInventory(options?: OperationOptions): Promise<InventoryResult | undefined>
+  executeCloudScript(data: CloudScriptOptions, options?: OperationOptions): Promise<CloudScriptResult | undefined>
   request<T = unknown>(path: string, data?: unknown, options?: PlayFabRequestOptions): Promise<T | undefined>
   abortPending(): void
 }

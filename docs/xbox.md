@@ -7,11 +7,12 @@ Create an XboxClient from an existing prismarine-auth Authflow (or a compatible
 const { XboxClient } = require('prismarine-xbox-services')
 const xbox = new XboxClient(auth, { titleId, scid, templateName })
 const session = await xbox.createSession({
-  properties: ({ profile }) => ({ custom: { owner: profile.id, ...worldMetadata } }),
+  properties: ({ profile }) => ({ custom: { owner: profile.xuid, ...worldMetadata } }),
   signal
 })
 session.on('error', handleError)
 try {
+  await session.setActivity()
   await session.invite({ xuid: friendXuid })
   await session.updateProperties({ custom: updatedMetadata })
   const document = await session.get()
@@ -28,13 +29,16 @@ template; invitations additionally require the title ID.
 
 - `getProfile(identifier = 'me', options)`: accepts `'me'`, `{ xuid: '123' }`, or
   `{ gamertag: 'SomePlayer' }`. Numeric gamertags are never guessed to be XUIDs.
+  Returns `{ xuid, gamertag, displayName, avatarUrl }`; XUIDs remain strings and unavailable
+  settings are undefined. Use `request()` for raw profile responses or other settings.
 - `getActivityHandles(xuid, options)`: returns activity handles for the configured SCID,
-  including their `sessionRef`; these are not full session documents.
-- `createSession({ properties, timeout, signal } = {})`: creates membership and publishes
-  activity, then returns a ready XboxSession. `properties` may be an object or an async
-  `({ profile }) => properties` callback; Minecraft-specific properties belong in the caller.
-- `joinSession(name, options)`: joins membership and publishes activity; returns the same
-  XboxSession API. Obtain the session document with `session.get()` if needed.
+  including their `sessionRef`; these are not full session documents. Only SCID is required.
+- `createSession({ name, properties, timeout, signal } = {})`: creates membership and reads
+  the initial session snapshot, then returns a ready XboxSession. Omit `name` to generate a UUID.
+  `properties` may be an object or an async `({ profile }) => properties` callback;
+  Minecraft-specific properties belong in the caller.
+- `joinSession(name, options)`: joins membership and reads the initial snapshot; returns the
+  same XboxSession API. Neither create nor join publishes activity automatically.
 - `getSession(name, options)`, `updateSession(name, payload, options)`: raw document operations.
 - `setActivity(name, options)`, `sendInvite(name, xuid, options)`: raw handle operations.
 - `request(method, url, { data, headers, contractVersion, timeout, signal })`: authenticated
@@ -49,7 +53,29 @@ IDs as strings, accept empty successful responses as undefined, and expose failu
 ## XboxSession
 
 Instances come from the client factories. They expose `name`, read-only lifecycle `state`,
-`get(options)`, `updateProperties(properties, options)`, `invite(identifier, options)` and `close()`.
+`current`, `get(options)`, `setActivity(options)`, `updateProperties(properties, options)`,
+`invite(identifier, options)` and `close()`.
+
+Call `setActivity()` to publish the session to the user's activity. Once explicitly published,
+activity is restored after reconnects. Calls to the client's raw `setActivity(name)` do not
+change the managed session's publication state.
+
+`current` returns a copy of the last observed document, initialized before create/join resolves.
+RTA notifications, resyncs and reconnects trigger serialized reads and snapshot comparisons:
+
+- `changed(current, previous)` reports a changed document.
+- `memberJoin(member)` / `memberLeave(member)` compare membership by
+  `member.constants.system.xuid`, not the document's member indexes.
+- `propertiesChanged(properties)` reports changes to session properties.
+
+Event arguments are copies; mutating them or `current` does not alter the cached document.
+The initial snapshot emits no change events; unchanged documents emit none either. Member
+objects are raw MPSD records, so a gamertag is not guaranteed. Resolve a profile explicitly
+if needed. `get()` performs a direct read without replacing the notification snapshot;
+`updateProperties()` writes properties, with the snapshot updated by the service notification.
+Notifications indicate that a refresh is needed; they are not a lossless history of every
+intermediate state. The title's session template must enable
+`connectionRequiredForActiveMembers` for MPSD notifications.
 Update payloads are wrapped in the session's `properties`; managed membership fields are not
 part of this operation. Raw document updates remain available on XboxClient and require care
 if they modify managed membership.
@@ -68,8 +94,8 @@ Explicit operation failures reject their promises. Startup failures clean up bef
 Background connection/refresh failures close the session and emit `error`; register a listener.
 Reconnection updates are serialized and never overwrite application-owned properties.
 
-Creation uses one membership PUT followed by activity publication. It no longer reads and
-writes the same properties back. Microsoft's [MPSD overview](https://learn.microsoft.com/en-us/gaming/gdk/docs/services/multiplayer/mpsd/live-mpsd-overview)
+Creation uses one membership PUT followed by a GET for the initial snapshot. It does not
+write the same properties back. Microsoft's [MPSD overview](https://learn.microsoft.com/en-us/gaming/gdk/docs/services/multiplayer/mpsd/live-mpsd-overview)
 describes session creation through the initial PUT; no requirement for the extra write was
 identified. Live title-specific integration remains necessary to validate this behavior.
 
