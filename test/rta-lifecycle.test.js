@@ -1,6 +1,6 @@
 /* eslint-env mocha */
 const assert = require('assert/strict')
-const { XboxRTASocket, SocketError, SocketClosedError, SocketNotConnectedError, RTARequestError } = require('..')
+const { XboxClient, XboxRTASocket, SocketError, SocketClosedError, SocketNotConnectedError, RTARequestError } = require('..')
 const receiveMessage = (socket, data) => socket.onSocketMessage({ data })
 const tick = () => new Promise(resolve => setImmediate(resolve))
 function ready () {
@@ -116,12 +116,12 @@ it('bounds authentication and prevents late requests without forcing token refre
     for (const cancel of [false, true]) {
       let resolveToken
       global.fetch = async () => assert.fail('late request')
-      const rta = new XboxRTASocket({
+      const rta = new XboxRTASocket(new XboxClient({
         getXboxToken: (relyingParty, forceRefresh) => {
           assert.equal(forceRefresh, undefined)
           return new Promise(resolve => { resolveToken = resolve })
         }
-      })
+      }))
       const connecting = assert.rejects(rta.connect({ timeout: 10 }), cancel ? /closed/ : /timed out/)
       await tick()
       if (cancel) await rta.close()
@@ -167,4 +167,33 @@ it('closing during resubscribe prevents resurrection and cleans up a late wire r
   assert.equal(sub.closed, true)
   assert.equal(rta._subscriptions.size, 0)
   assert.deepEqual(sent.at(-1), [2, 2, 43])
+})
+
+it('shares Xbox authentication without cancelling unrelated client requests', async () => {
+  const originalFetch = global.fetch
+  const signals = new Map()
+  let completeOther
+  const client = new XboxClient({ getXboxToken: async () => ({ userHash: 'hash', XSTSToken: 'token' }) })
+  const rta = new XboxRTASocket(client)
+  global.fetch = (url, options) => {
+    assert.equal(options.headers.authorization, 'XBL3.0 x=hash;token')
+    signals.set(url, options.signal)
+    return new Promise(resolve => {
+      if (url === 'https://example.com/other') completeOther = resolve
+    })
+  }
+  try {
+    const other = client.request('GET', 'https://example.com/other')
+    const connecting = assert.rejects(rta.connect(), SocketClosedError)
+    await tick()
+    await rta.close()
+    await connecting
+    assert.equal(signals.get('https://rta.xboxlive.com/nonce').aborted, true)
+    assert.equal(signals.get('https://example.com/other').aborted, false)
+    completeOther(new Response('{"ok":true}'))
+    assert.equal((await other).ok, true)
+  } finally {
+    await rta.close()
+    global.fetch = originalFetch
+  }
 })

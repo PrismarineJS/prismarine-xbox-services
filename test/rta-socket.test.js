@@ -3,7 +3,7 @@ const assert = require('assert/strict')
 const { once } = require('events')
 const { createServer } = require('http')
 const { WebSocketServer } = require('ws')
-const { XboxRTASocket, XboxRTASubscription, SocketClosedError, RTARequestError, ServiceError } = require('..')
+const { XboxClient, XboxRTASocket, XboxRTASubscription, SocketClosedError, RTARequestError, ServiceError } = require('..')
 const tick = () => new Promise(resolve => setImmediate(resolve))
 const auth = { getXboxToken: async () => ({ userHash: 'hash', XSTSToken: 'token' }) }
 
@@ -20,7 +20,7 @@ async function withServer (run) {
     }
   }
   global.fetch = async () => new Response('{"nonce":"local"}')
-  const rta = new XboxRTASocket(auth)
+  const rta = new XboxRTASocket(new XboxClient(auth))
   try { await run(rta, server) } finally {
     await rta.close()
     for (const socket of server.clients) socket.terminate()
@@ -133,7 +133,7 @@ it('aborts a native WebSocket while its HTTP upgrade is pending', async () => {
     constructor () { super(`ws://127.0.0.1:${server.address().port}`) }
   }
   global.fetch = async () => new Response('{"nonce":"local"}')
-  const rta = new XboxRTASocket(auth)
+  const rta = new XboxRTASocket(new XboxClient(auth))
   try {
     const controller = new AbortController()
     const upgraded = once(server, 'upgrade')
@@ -157,11 +157,11 @@ it('aborts a native WebSocket while its HTTP upgrade is pending', async () => {
 it('reports nonce HTTP failures with structured service errors', async () => {
   const originalFetch = global.fetch
   global.fetch = async () => new Response('unavailable', { status: 503 })
-  const rta = new XboxRTASocket(auth)
+  const rta = new XboxRTASocket(new XboxClient(auth))
   try {
     await assert.rejects(rta.connect(), error => {
       assert(error instanceof ServiceError)
-      assert.equal(error.service, 'Xbox RTA')
+      assert.equal(error.service, 'Xbox')
       assert.equal(error.status, 503)
       assert.equal(error.body, 'unavailable')
       return true

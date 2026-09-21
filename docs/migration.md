@@ -50,3 +50,7 @@ and is emitted once on terminal local shutdown, rather than on remote disconnect
 
 Use `await socket.connect(options)` for complete setup. Internally `_connectSocket(nonce, signal)`
 opens the WebSocket and attaches class-bound event handlers; there is no separate initialization step.
+
+Construct RTA sockets with `new XboxRTASocket(xboxClient)` rather than passing an Authflow.
+The shared client owns nonce HTTP authentication and response handling; socket cancellation
+remains isolated from other work using that client.

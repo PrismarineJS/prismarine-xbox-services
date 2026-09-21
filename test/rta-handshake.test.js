@@ -2,7 +2,7 @@
 const test = it
 const assert = require('node:assert/strict')
 const { getEventListeners } = require('node:events')
-const { XboxRTASocket, SocketClosedError, SocketAlreadyConnectedError } = require('../')
+const { XboxClient, XboxRTASocket, SocketClosedError, SocketAlreadyConnectedError } = require('../')
 const tick = () => new Promise(resolve => setImmediate(resolve))
 
 async function withSocket (run) {
@@ -18,8 +18,8 @@ async function withSocket (run) {
     close () { this.closeCalls++; this.readyState = 3 }
   }
   global.WebSocket = FakeSocket
-  global.fetch = async () => ({ ok: true, json: async () => ({ nonce: 'nonce' }) })
-  const rta = new XboxRTASocket({ getXboxToken: async () => ({ userHash: 'hash', XSTSToken: 'token' }) })
+  global.fetch = async () => new Response('{"nonce":"nonce"}')
+  const rta = new XboxRTASocket(new XboxClient({ getXboxToken: async () => ({ userHash: 'hash', XSTSToken: 'token' }) }))
   try { await run(rta, sockets) } finally { await rta.close(); global.WebSocket = Original; global.fetch = originalFetch }
 }
 

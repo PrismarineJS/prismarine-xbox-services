@@ -1,8 +1,9 @@
 # Xbox Real Time Activity (experimental)
 
 ```js
-const { XboxRTASocket } = require('prismarine-xbox-services')
-const rta = new XboxRTASocket(auth)
+const { XboxClient, XboxRTASocket } = require('prismarine-xbox-services')
+const xbox = new XboxClient(auth)
+const rta = new XboxRTASocket(xbox)
 rta.on('error', handleBackgroundFailure)
 rta.on('resync', refreshAuthoritativeState)
 try {
@@ -45,7 +46,11 @@ event tells callers to refresh authoritative service state.
 
 Awaited request failures reject only; they are not also emitted as errors. Independent transport
 failures still emit `error`, so callers need both an error listener and promise handling.
-Authentication refresh decisions stay with the credential provider.
+The socket borrows an XboxClient for nonce requests, reusing its authentication headers,
+JSON parsing and HTTP errors. Authentication refresh stays with the client's credential
+provider. Socket cancellation affects only its own nonce request; it never calls the shared
+client's `abortPending()`. An explicit connection timeout is forwarded to the nonce request;
+otherwise the client's HTTP timeout applies, within the overall connection deadline.
 
 Diagnostics: `DEBUG=prismarine-xbox-services:rta`. Public members are documented above;
 transport state and maps are implementation details. 
@@ -64,7 +69,7 @@ call `connect()` for complete setup rather than invoking the transport helper di
 
 ## Native WebSocket transport
 
-The runtime uses Node 24's built-in WebSocket and fetch. `ws` is only a development dependency
+The runtime uses Node 24's built-in WebSocket, with nonce HTTP requests through XboxClient. `ws` is only a development dependency
 for local test servers. Native WebSocket automatically answers server pings. The previous
 pong-triggered watchdog has been removed: it never sent pings, and no server pong interval
 was established. There is no active client heartbeat or guaranteed idle dead-connection
@@ -79,4 +84,4 @@ and potentially keep the process alive; the package cannot promise a transport t
 RTA request failures expose `RTARequestError extends SocketError` with numeric `status` and
 symbolic `code` (for example, `1001` / `Throttled`; unknown statuses use `Unknown`). The numeric
 status is retained even if unknown. Nonce HTTP failures use `ServiceError` with service
-`Xbox RTA`, HTTP `status` and response `body`.
+`Xbox`, HTTP `status` and response `body`.

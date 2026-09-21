@@ -2,7 +2,6 @@
 const { EventEmitter, once } = require('events')
 const { withDeadline } = require('../withDeadline')
 const { XboxRTASubscription } = require('./subscription')
-const { ServiceError } = require('../errors')
 const { MessageType, StatusCode, RTARequestError, SocketError, SocketClosedError, SocketNotConnectedError, SocketAlreadyConnectedError } = require('./constants')
 const debug = require('debug')('prismarine-xbox-services:rta')
 const NONCE_URL = 'https://rta.xboxlive.com/nonce'
@@ -20,9 +19,9 @@ class XboxRTASocket extends EventEmitter {
   ws = null
   reconnectTimeout = null
   sequenceId = 0
-  constructor (authflow) {
+  constructor (client) {
     super()
-    this.authflow = authflow
+    this.client = client
   }
 
   async connect (options = {}) {
@@ -139,20 +138,7 @@ class XboxRTASocket extends EventEmitter {
   }
 
   async _getNonce (signal) {
-    signal.throwIfAborted()
-    const xbl = await this.authflow.getXboxToken('http://xboxlive.com')
-    const authorization = `XBL3.0 x=${xbl.userHash};${xbl.XSTSToken}`
-    signal.throwIfAborted()
-    const nonceResponse = await fetch(NONCE_URL, {
-      headers: { authorization },
-      signal,
-      redirect: 'error'
-    })
-    if (!nonceResponse.ok) {
-      throw new ServiceError('Xbox RTA', nonceResponse.status, await nonceResponse.text())
-    }
-    const { nonce } = await nonceResponse.json()
-    signal.throwIfAborted()
+    const { nonce } = await this.client.request('GET', NONCE_URL, { signal, timeout: this.options.timeout })
     return nonce
   }
 

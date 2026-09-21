@@ -12,7 +12,7 @@ class XboxSession extends EventEmitter {
     this.name = name
     this.state = 'opening'
     this._lifetime = new AbortController()
-    this._rta = new XboxRTASocket(client.authflow)
+    this._rta = new XboxRTASocket(client)
     this._membershipAttempted = false
     this._refresh = Promise.resolve()
     this._activityPublished = false
