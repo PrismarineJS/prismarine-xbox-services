@@ -2,7 +2,7 @@ const { randomUUID } = require('crypto')
 const { EventEmitter } = require('events')
 const { isDeepStrictEqual } = require('util')
 const { XboxRTASocket } = require('../rta')
-const { operation } = require('../operation')
+const { withDeadline } = require('../withDeadline')
 const debug = require('debug')('prismarine-xbox-services:session')
 
 class XboxSession extends EventEmitter {
@@ -30,7 +30,7 @@ class XboxSession extends EventEmitter {
     const session = new XboxSession(client, name ?? options.name ?? randomUUID())
     const timeout = options.timeout ?? client.options.timeout ?? 15000
     try {
-      await operation(async signal => {
+      await withDeadline(async signal => {
         const requestOptions = { signal, timeout }
         const profile = await client.getProfile('me', requestOptions)
         signal.throwIfAborted()
@@ -80,7 +80,7 @@ class XboxSession extends EventEmitter {
   _run (run, options) {
     if (this.state !== 'open') return Promise.reject(new Error('Xbox session is not open'))
     const timeout = options?.timeout ?? this._client.options.timeout ?? 15000
-    return operation(signal => run({ signal, timeout }), { signal: options?.signal, timeout }, this._lifetime.signal)
+    return withDeadline(signal => run({ signal, timeout }), { signal: options?.signal, timeout }, this._lifetime.signal)
   }
 
   async _write (payload, options) {

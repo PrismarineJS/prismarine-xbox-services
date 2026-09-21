@@ -1,4 +1,4 @@
-const { operation } = require('./operation')
+const { withDeadline } = require('./withDeadline')
 const { ServiceError } = require('./errors')
 const { parse, stringify } = require('json-bigint')({ storeAsString: true })
 
@@ -22,7 +22,7 @@ class JsonClient {
   }
 
   async _request (method, config) {
-    return operation(async signal => {
+    return withDeadline(async signal => {
       const authorization = await this.getHeaders(config)
       signal.throwIfAborted()
       const hasBody = config.data !== undefined

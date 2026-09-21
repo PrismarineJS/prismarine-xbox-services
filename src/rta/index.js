@@ -1,6 +1,6 @@
 // Adapted from https://github.com/LucienHH/xbox-rta.
 const { EventEmitter, once } = require('events')
-const { operation } = require('../operation')
+const { withDeadline } = require('../withDeadline')
 const { XboxRTASubscription } = require('./subscription')
 const { ServiceError } = require('../errors')
 const { MessageType, StatusCode, RTARequestError, SocketError, SocketClosedError, SocketNotConnectedError, SocketAlreadyConnectedError } = require('./constants')
@@ -32,30 +32,13 @@ class XboxRTASocket extends EventEmitter {
     const controller = new AbortController()
     this._connectController = controller
     try {
-      await operation(async signal => {
-        signal.throwIfAborted()
-        const xbl = await this.authflow.getXboxToken('http://xboxlive.com')
-        const authorization = `XBL3.0 x=${xbl.userHash};${xbl.XSTSToken}`
-        signal.throwIfAborted()
-        const nonceResponse = await fetch(NONCE_URL, {
-          headers: { authorization },
-          signal,
-          redirect: 'error'
-        })
-        if (!nonceResponse.ok) {
-          throw new ServiceError('Xbox RTA', nonceResponse.status, await nonceResponse.text())
-        }
-        const { nonce } = await nonceResponse.json()
-        signal.throwIfAborted()
+      await withDeadline(async signal => {
+        const nonce = await this._getNonce(signal)
         await this._connectSocket(nonce, signal)
         await this._restoreSubscriptions(signal)
         signal.throwIfAborted()
         debug('RTA connected and subscriptions restored')
-        this.reconnectTimeout = setTimeout(() => {
-          this.reconnect().catch(error => {
-            if (!this.closed) this.emit('error', error)
-          })
-        }, CONNECTION_RENEWAL_MS)
+        this._scheduleRenewal()
       }, options, controller.signal)
     } catch (error) {
       // An older cancelled attempt must not clean up a replacement connection.
@@ -144,7 +127,7 @@ class XboxRTASocket extends EventEmitter {
     const sequenceId = this.sequenceId++
     const data = JSON.stringify([type, sequenceId, payload])
     try {
-      return await operation(signal => new Promise((resolve, reject) => {
+      return await withDeadline(signal => new Promise((resolve, reject) => {
         this._pendingRequests.set(sequenceId, { resolve, reject, type, signal })
         signal.throwIfAborted()
         if (this.ws !== socket) throw new SocketClosedError()
@@ -153,6 +136,32 @@ class XboxRTASocket extends EventEmitter {
     } finally {
       this._pendingRequests.delete(sequenceId)
     }
+  }
+
+  async _getNonce (signal) {
+    signal.throwIfAborted()
+    const xbl = await this.authflow.getXboxToken('http://xboxlive.com')
+    const authorization = `XBL3.0 x=${xbl.userHash};${xbl.XSTSToken}`
+    signal.throwIfAborted()
+    const nonceResponse = await fetch(NONCE_URL, {
+      headers: { authorization },
+      signal,
+      redirect: 'error'
+    })
+    if (!nonceResponse.ok) {
+      throw new ServiceError('Xbox RTA', nonceResponse.status, await nonceResponse.text())
+    }
+    const { nonce } = await nonceResponse.json()
+    signal.throwIfAborted()
+    return nonce
+  }
+
+  _scheduleRenewal () {
+    this.reconnectTimeout = setTimeout(() => {
+      this.reconnect().catch(error => {
+        if (!this.closed) this.emit('error', error)
+      })
+    }, CONNECTION_RENEWAL_MS)
   }
 
   async _connectSocket (nonce, signal) {
