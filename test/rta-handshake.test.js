@@ -90,6 +90,13 @@ test('an older aborted startup cannot release its replacement socket', async () 
     await tick()
     const replacement = rta.reconnect()
     await tick()
+    // A callback queued by the old transport must not abort the new handshake.
+    rta.onSocketClose({ target: sockets[0], code: 1005, reason: '' })
+    rta.onSocketError({ target: sockets[0], error: new Error('stale error') })
+    let resyncs = 0
+    rta.on('resync', () => { resyncs++ })
+    rta.onSocketMessage({ target: sockets[0], data: '[4]' })
+    assert.equal(resyncs, 0)
     sockets[1].open()
     await Promise.all([first, replacement])
     assert.equal(sockets[0].closeCalls, 1)
@@ -99,8 +106,6 @@ test('an older aborted startup cannot release its replacement socket', async () 
       assert.equal(getEventListeners(sockets[0], event).length, 0)
       assert.equal(getEventListeners(sockets[1], event).length, 1)
     }
-    let resyncs = 0
-    rta.on('resync', () => { resyncs++ })
     sockets[0].dispatchEvent(Object.assign(new Event('message'), { data: '[4]' }))
     sockets[0].serverClose(1006)
     assert.equal(resyncs, 0)

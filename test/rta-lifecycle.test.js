@@ -1,7 +1,7 @@
 /* eslint-env mocha */
 const assert = require('assert/strict')
 const { XboxClient, XboxRTASocket, SocketError, SocketClosedError, SocketNotConnectedError, RTARequestError } = require('..')
-const receiveMessage = (socket, data) => socket.onSocketMessage({ data })
+const receiveMessage = (socket, data) => socket.onSocketMessage({ target: socket.ws, data })
 const tick = () => new Promise(resolve => setImmediate(resolve))
 function ready () {
   const rta = new XboxRTASocket({})

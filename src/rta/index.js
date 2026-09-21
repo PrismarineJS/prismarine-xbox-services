@@ -175,13 +175,15 @@ class XboxRTASocket extends EventEmitter {
   }
 
   onSocketError = event => {
+    if (event.target !== this.ws) return
     const error = event.error || new SocketError(event.message || 'RTA WebSocket failed')
     debug('RTA error', error)
     if (this._connectController) this._connectController.abort(error)
     else if (!this.closed) this.emit('error', error)
   }
 
-  onSocketClose = ({ code, reason }) => {
+  onSocketClose = ({ target, code, reason }) => {
+    if (target !== this.ws) return
     if (this._connectController) {
       this._connectController.abort(new SocketClosedError(`RTA connection closed: ${code} ${reason}`))
       return
@@ -196,7 +198,8 @@ class XboxRTASocket extends EventEmitter {
     }
   }
 
-  onSocketMessage = ({ data: res }) => {
+  onSocketMessage = ({ target, data: res }) => {
+    if (target !== this.ws) return
     if (!(typeof res === 'string')) { return debug('Received non-string message', res) }
     let msgJson
     try {

@@ -247,7 +247,7 @@ describe('managed sessions', () => {
     await tick()
     assert(requests.some(r => r.body?.members?.me?.properties?.system?.connection === 'replacement'))
     const failure = new Promise(resolve => session.once('error', resolve))
-    rta.onSocketClose({ code: 1000, reason: 'shutdown' })
+    rta.onSocketClose({ target: rta.ws, code: 1000, reason: 'shutdown' })
     assert.match((await failure).message, /shutdown/)
     assert.equal(session.state, 'closed')
   })
