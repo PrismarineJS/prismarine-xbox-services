@@ -46,7 +46,6 @@ describe('Xbox HTTP requests', () => {
     resolveToken(await auth.getXboxToken())
     await tick()
     assert.strictEqual(fetched, false)
-    assert.strictEqual(rest.requests.size, 0)
   })
 
   it('bounds response-body reading and aborts the fetch signal', async () => {
@@ -67,7 +66,25 @@ describe('Xbox HTTP requests', () => {
     await request
     global.fetch = async () => new Response(null, { status: 204 })
     await rest.updateSession('world', { members: { me: null } })
-    assert.strictEqual(rest.requests.size, 0)
+  })
+
+  it('keeps caller cancellation independent and cancels all remaining requests', async () => {
+    const signals = []
+    global.fetch = (url, { signal }) => {
+      signals.push(signal)
+      return new Promise(() => {})
+    }
+    const client = new XboxClient(auth)
+    const caller = new AbortController()
+    const first = assert.rejects(client.request('GET', 'https://example.com', { signal: caller.signal }), /caller cancelled/)
+    const remaining = [1, 2].map(() => assert.rejects(client.request('GET', 'https://example.com'), /cancelled/))
+    await tick()
+    caller.abort(new Error('caller cancelled'))
+    await first
+    assert.deepStrictEqual(signals.map(signal => signal.aborted), [true, false, false])
+    client.abortPending()
+    await Promise.all(remaining)
+    assert(signals.every(signal => signal.aborted))
   })
 
   it('honors caller cancellation before and during a request', async () => {

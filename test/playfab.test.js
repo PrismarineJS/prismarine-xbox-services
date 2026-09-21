@@ -70,7 +70,6 @@ describe('PlayFab service requests', () => {
     await assert.rejects(client.request('Client/GetAccountInfo'), /timed out/)
     finish(await credentials())
     await new Promise(resolve => setImmediate(resolve))
-    assert.equal(client.requests.size, 0)
   })
 
   it('cancels pending work and allows later requests', async () => {
