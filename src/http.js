@@ -14,19 +14,15 @@ async function readJsonResponse (response, service = 'HTTP') {
   return body.trim() ? parse(body) : undefined
 }
 
-class JsonClient {
-  constructor (options, service) {
-    this.options = { ...options }
-    this.service = service
-    this.requests = new Set()
-  }
+function createJsonClient (getHeaders, { service, timeout } = {}) {
+  const requests = new Set()
 
-  async _request (method, config) {
+  async function request (method, config) {
     const controller = new AbortController()
-    this.requests.add(controller)
+    requests.add(controller)
     try {
       return await operation(async signal => {
-        const authorization = await this.getHeaders(config)
+        const authorization = await getHeaders(config)
         signal.throwIfAborted()
         const hasBody = config.data !== undefined
         const headers = {
@@ -43,16 +39,17 @@ class JsonClient {
           redirect: 'error',
           ...(hasBody ? { body: stringify(config.data) } : {})
         })
-        return readJsonResponse(response, this.service)
-      }, { signal: config.signal, timeout: config.timeout ?? this.options.timeout }, controller.signal)
+        return readJsonResponse(response, service)
+      }, { signal: config.signal, timeout: config.timeout ?? timeout }, controller.signal)
     } finally {
-      this.requests.delete(controller)
+      requests.delete(controller)
     }
   }
 
-  abortPending () {
-    for (const controller of this.requests) controller.abort(new Error(`${this.service} request cancelled`))
+  function abortPending () {
+    for (const controller of requests) controller.abort(new Error(`${service} request cancelled`))
   }
+  return { request, abortPending }
 }
 
-module.exports = { JsonClient }
+module.exports = { createJsonClient }

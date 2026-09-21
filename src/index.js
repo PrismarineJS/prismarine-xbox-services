@@ -1,8 +1,6 @@
 module.exports = {
-  ServiceError: require('./errors').ServiceError,
-  XboxClient: require('./xbox/client').XboxClient,
-  XboxSession: require('./xbox/session').XboxSession,
-  RtaSubscription: require('./rta/subscription').RtaSubscription,
-  XboxRTA: require('./rta').XboxRTA,
-  PlayFabClient: require('./playfab/client').PlayFabClient
+  createXboxClient: require('./xbox/client').createXboxClient,
+  createPlayFabClient: require('./playfab/client').createPlayFabClient,
+  connectRta: require('./rta').connectRta,
+  ServiceError: require('./errors').ServiceError
 }

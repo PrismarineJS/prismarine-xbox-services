@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Use plain client factories and event emitters with closure-owned state; replace the adapted RTA transport.
+- Add normalized profiles, named sessions and opt-in activity publication.
+- Refresh session snapshots on RTA notifications/resync; emit observed member and property changes.
+- Add PlayFab title data, inventory and CloudScript helpers.
+
 - Replace SessionDirectory with ready XboxSession factories, explicit identities, and close().
 - Return stable RTA subscriptions and separate request failures from background errors.
 - Share operation deadlines and give managed sessions independent cancellation and bounded cleanup.

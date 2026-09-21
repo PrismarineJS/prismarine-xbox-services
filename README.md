@@ -2,52 +2,53 @@
 
 [![Build Status](https://github.com/PrismarineJS/prismarine-xbox-services/actions/workflows/ci.yml/badge.svg)](https://github.com/PrismarineJS/prismarine-xbox-services/actions/workflows/ci.yml)
 
-Xbox and PlayFab services API for Node.js.
-
-## Usage
-
-Node.js 22 or newer is required. The API is experimental; coordinate version updates with consumers.
+Xbox and PlayFab services API for Node.js 22+. The API is experimental.
 
 ```js
-const { XboxClient } = require('prismarine-xbox-services')
-const { Authflow } = require('prismarine-auth')
-const auth = new Authflow(username, cacheDirectory, authOptions)
-const xbox = new XboxClient(auth)
-const profile = await xbox.getProfile('me')
+const { createXboxClient } = require('prismarine-xbox-services')
+const xbox = createXboxClient(auth, { titleId, scid, templateName })
+const profile = await xbox.getProfile({ gamertag: 'SomePlayer' })
+
+const session = await xbox.createSession({
+  name: 'my-session',
+  properties: { custom: worldMetadata },
+  publishActivity: true
+})
+session.on('error', console.error)
+session.on('changed', snapshot => console.log(snapshot.properties))
+session.on('memberJoin', member => console.log(member.constants.system.xuid))
+try {
+  await session.invite({ xuid: profile.xuid })
+  // Keep the session open for as long as the application needs it.
+} finally {
+  await session.close()
+}
 ```
 
-Supply your existing Authflow; sign-in, token acquisition, caching and refresh stay in
-[prismarine-auth](https://github.com/PrismarineJS/prismarine-auth). The package has no runtime
-dependency on prismarine-auth and accepts compatible credential providers.
+Supply an existing [prismarine-auth](https://github.com/PrismarineJS/prismarine-auth) Authflow.
+Authentication and credential caching stay there. Title configuration, Minecraft world
+metadata, and game protocol behavior stay with the caller.
 
-- [XboxClient and XboxSession](docs/xbox.md): profiles, multiplayer sessions, invitations,
-  and activity publishing with caller-provided title configuration.
-- [XboxRTA](docs/rta.md): Real Time Activity connections, subscriptions and lifecycle management.
-- [PlayFabClient](docs/playfab.md): isolated authenticated PlayFab requests with caller-provided
-  credentials and title ID.
+- [`createXboxClient`](docs/xbox.md): profiles, activity discovery, invitations, and managed sessions.
+- [`connectRta`](docs/rta.md): a connected Node event emitter with stable subscriptions.
+- [`createPlayFabClient`](docs/playfab.md): a separate client for authenticated PlayFab requests.
 
-Minecraft title defaults, world metadata and game protocol behavior belong to consumers.
-The focus is services needed by Minecraft clients and bots, with reusable configuration for
-other applications. See the [migration guide](docs/migration.md), [architecture proposal](https://github.com/PrismarineJS/prismarine-auth/issues/185)
-and [source provenance](docs/provenance.md).
-
-Tests cover mocked service boundaries and local WebSocket connections. Live authenticated
-Xbox and PlayFab integration still needs verification with title-specific credentials.
+Clients are plain objects. Sessions, RTA connections, and subscriptions are EventEmitters;
+internal state is private to each instance. There are no compatibility aliases or runtime
+prismarine-auth/Git dependencies. See the [migration guide](docs/migration.md) and
+[protocol references](docs/references.md).
 
 ## Development
 
-Use Node.js 22 or newer.
-
 ```sh
-git clone https://github.com/PrismarineJS/prismarine-xbox-services.git
-cd prismarine-xbox-services
 npm install
 npm test
 ```
 
-`npm test` runs lint and tests. Use `npm run fix` to apply JavaScript Standard Style fixes.
-See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution and release notes.
+Tests include local WebSocket exchanges and mocked service responses; they need no live
+credentials. Live Xbox/PlayFab integration still requires title-specific verification.
+`npm test` runs lint, type checks and tests. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
-[MIT](LICENSE). Incorporated code retains its [original license notices](licenses/).
+[MIT](LICENSE)

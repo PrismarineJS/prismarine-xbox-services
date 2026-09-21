@@ -1,22 +1,26 @@
-# Migration from the initial extraction
+# Experimental API changes
 
-This experimental API revision deliberately removes compatibility aliases before consumer migration.
+This package has no compatibility aliases. Update consumers to the current API directly.
 
-| Initial API | Replacement |
+| Previous API | Current API |
 | --- | --- |
-| `new SessionDirectory(auth, title); await session.createSession(properties)` | `await new XboxClient(auth, title).createSession({ properties })` |
-| `session.joinSession(name)` returning a document | `await xbox.joinSession(name)` returning an XboxSession; call `get()` for the document |
-| `session.updateSession({ properties })` | `session.updateProperties(properties)` |
-| `session.invitePlayer('123')` | `session.invite({ xuid: '123' })` or `{ gamertag: '123' }` |
-| `session.end()` | `session.close()` |
-| `xbox.getSessions(xuid)` | `xbox.getActivityHandles(xuid)` |
-| `xbox.get/post/put/delete(url, options)` | `xbox.request(method, url, options)` |
-| RTA wire response / subscription ID | Stable subscription object with `.data`, `data` / `ready` events and `.close()` |
-| `rta.destroy()` / `rta.destroy(true)` | `rta.close()` / `rta.reconnect()` |
-| PlayFab error `.error` / `.errorDetails` | `ServiceError.code` / `.details` |
+| `new XboxClient(auth, options)` | `createXboxClient(auth, options)` |
+| `new PlayFabClient(credentials, options)` | `createPlayFabClient(credentials, options)` |
+| `new XboxRTA(auth); await rta.connect(options)` | `await connectRta(auth, options)` |
+| `profile.id` / raw profile settings | `profile.xuid`, `gamertag`, `displayName`, `avatarUrl` |
+| Automatic activity publication on create/join | Explicit `{ publishActivity: true }` or `session.setActivity()` |
+| RTA `close(code, reason)` notification | `disconnect(code, reason)`; `close` now means terminal local shutdown |
+| `SessionDirectory` construction/inheritance | Client createSession/joinSession factories returning event emitters |
+| `invitePlayer('123')` | `invite({ xuid: '123' })` or `invite({ gamertag: '123' })` |
+| `getSessions(xuid)` | `getActivityHandles(xuid)` |
+| Session `end()` / RTA `destroy()` | `close()` |
+| RTA unsubscribe by numeric ID | `subscription.close()` |
 
-For bedrock-protocol, keep Minecraft title defaults and world property construction in its
-adapter, but replace inheritance with a factory that calls `xbox.createSession({ properties })`.
-World discovery uses the client directly. Join callers obtain the document with `session.get()`.
-The protocol's shutdown path calls `session.close()`. This package revision does not edit or
-merge the Bedrock consumer PR or change prismarine-auth's APIs.
+Sessions now start with an authoritative snapshot. get() refreshes it; changed/memberJoin/
+memberLeave/propertiesChanged events report observed differences. updateProperties() writes
+and refreshes. Treat snapshot/event values as data; mutating them does not update the server.
+
+Bedrock consumers retain title constants, world properties and Nethernet transport logic.
+Replace the inherited adapter with a small factory around createSession({ properties,
+publishActivity: true }). Use profile.xuid inside property callbacks and session.snapshot or
+await session.get() to read the returned session document. Consumer migration is a separate PR.

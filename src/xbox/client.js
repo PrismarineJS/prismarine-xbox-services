@@ -1,83 +1,80 @@
-const { JsonClient } = require('../http')
-const { XboxSession } = require('./session')
+const { createJsonClient } = require('../http')
+const { openSession } = require('./session')
 
-class XboxClient extends JsonClient {
-  constructor (authflow, options = {}) {
-    super(options, 'Xbox')
-    this.authflow = authflow
-  }
+function profilePath (identifier) {
+  if (identifier === 'me') return 'me'
+  if (typeof identifier?.xuid === 'string' && /^\d+$/.test(identifier.xuid) && identifier.gamertag === undefined) return `xuids(${identifier.xuid})`
+  if (typeof identifier?.gamertag === 'string' && identifier.xuid === undefined) return `gt(${encodeURIComponent(identifier.gamertag)})`
+  throw new TypeError('Expected me, { xuid }, or { gamertag }')
+}
 
-  request (method, url, options = {}) {
-    return this._request(method, { ...options, url })
-  }
+function createXboxClient (auth, options = {}) {
+  options = { ...options }
+  const http = createJsonClient(async () => {
+    const token = await auth.getXboxToken('http://xboxlive.com')
+    return { authorization: `XBL3.0 x=${token.userHash};${token.XSTSToken}`, 'accept-language': 'en-US' }
+  }, { service: 'Xbox', timeout: options.timeout })
 
-  async getHeaders () {
-    const auth = await this.authflow.getXboxToken('http://xboxlive.com')
-    return { authorization: `XBL3.0 x=${auth.userHash};${auth.XSTSToken}`, 'accept-language': 'en-US' }
-  }
-
-  _sessionRef (name) {
+  function sessionRef (name) {
     for (const field of ['scid', 'templateName']) {
-      if (!this.options[field]) throw new TypeError(`Xbox session requires ${field}`)
+      if (!options[field]) throw new TypeError(`Xbox sessions require ${field}`)
     }
-    return { scid: this.options.scid, templateName: this.options.templateName, name }
+    return { scid: options.scid, templateName: options.templateName, name }
   }
 
-  _sessionUrl (name) {
-    const ref = this._sessionRef(name)
-    return `https://sessiondirectory.xboxlive.com/serviceconfigs/${encodeURIComponent(ref.scid)}/sessionTemplates/${encodeURIComponent(ref.templateName)}/sessions/${encodeURIComponent(ref.name)}`
+  function sessionUrl (name) {
+    const ref = sessionRef(name)
+    return `https://sessiondirectory.xboxlive.com/serviceconfigs/${encodeURIComponent(ref.scid)}/sessionTemplates/${encodeURIComponent(ref.templateName)}/sessions/${encodeURIComponent(name)}`
   }
 
-  async getProfile (identifier = 'me', options = {}) {
-    let user
-    if (identifier === 'me') user = 'me'
-    else if (typeof identifier?.xuid === 'string' && /^\d+$/.test(identifier.xuid) && identifier.gamertag === undefined) user = `xuids(${identifier.xuid})`
-    else if (typeof identifier?.gamertag === 'string' && identifier.xuid === undefined) user = `gt(${encodeURIComponent(identifier.gamertag)})`
-    else throw new TypeError('Expected me, { xuid }, or { gamertag }')
-    const response = await this.request('GET', `https://profile.xboxlive.com/users/${user}/settings`, { ...options, contractVersion: '2' })
-    return response.profileUsers[0]
+  function request (method, url, config = {}) {
+    return http.request(method, { ...config, url })
   }
 
-  async getActivityHandles (xuid, options = {}) {
-    this._sessionRef('')
-    const response = await this.request('POST', 'https://sessiondirectory.xboxlive.com/handles/query?include=relatedInfo,customProperties', {
-      ...options,
-      data: { type: 'activity', scid: this.options.scid, owners: { people: { moniker: 'people', monikerXuid: xuid } } },
+  async function getProfile (identifier = 'me', config = {}) {
+    const settings = 'Gamertag,GameDisplayName,GameDisplayPicRaw'
+    const response = await request('GET', `https://profile.xboxlive.com/users/${profilePath(identifier)}/settings?settings=${settings}`, { ...config, contractVersion: '2' })
+    const profile = response.profileUsers[0]
+    if (!profile) throw new Error('Xbox profile not found')
+    const values = Object.fromEntries((profile.settings || []).map(setting => [setting.id, setting.value]))
+    return { xuid: String(profile.id), gamertag: values.Gamertag, displayName: values.GameDisplayName, avatarUrl: values.GameDisplayPicRaw }
+  }
+
+  async function getActivityHandles (xuid, config = {}) {
+    if (!options.scid) throw new TypeError('Xbox activity lookup requires scid')
+    const response = await request('POST', 'https://sessiondirectory.xboxlive.com/handles/query?include=relatedInfo,customProperties', {
+      ...config,
+      data: { type: 'activity', scid: options.scid, owners: { people: { moniker: 'people', monikerXuid: xuid } } },
       contractVersion: '107'
     })
     return response.results
   }
 
-  getSession (name, options = {}) {
-    return this.request('GET', this._sessionUrl(name), { ...options, contractVersion: '107' })
+  function sendHandle (data, config) {
+    return request('POST', 'https://sessiondirectory.xboxlive.com/handles', { ...config, data, contractVersion: '107' })
   }
 
-  updateSession (name, payload, options = {}) {
-    return this.request('PUT', this._sessionUrl(name), { ...options, data: payload, contractVersion: '107' })
+  const client = {
+    request,
+    abortPending: http.abortPending,
+    getProfile,
+    getActivityHandles,
+    getSession: (name, config) => request('GET', sessionUrl(name), { ...config, contractVersion: '107' }),
+    updateSession: (name, data, config) => request('PUT', sessionUrl(name), { ...config, data, contractVersion: '107' }),
+    setActivity: (name, config) => sendHandle({ version: 1, type: 'activity', sessionRef: sessionRef(name) }, config),
+    sendInvite (name, xuid, config) {
+      if (!options.titleId) throw new TypeError('Xbox invitations require titleId')
+      return sendHandle({ version: 1, type: 'invite', sessionRef: sessionRef(name), invitedXuid: xuid, inviteAttributes: { titleId: options.titleId } }, config)
+    },
+    createSession: config => open(true, config),
+    joinSession: (name, config) => open(false, { ...config, name })
   }
 
-  setActivity (name, options = {}) {
-    return this._sendHandle({ version: 1, type: 'activity', sessionRef: this._sessionRef(name) }, options)
+  function open (create, config = {}) {
+    sessionRef(config.name)
+    if ((!create || config.name !== undefined) && (typeof config.name !== 'string' || !config.name)) throw new TypeError('Session name is required')
+    return openSession(client, auth, options, create, config)
   }
-
-  sendInvite (name, xuid, options = {}) {
-    if (!this.options.titleId) throw new TypeError('Xbox invitations require titleId')
-    return this._sendHandle({
-      version: 1, type: 'invite', sessionRef: this._sessionRef(name), invitedXuid: xuid, inviteAttributes: { titleId: this.options.titleId }
-    }, options)
-  }
-
-  _sendHandle (data, options) {
-    return this.request('POST', 'https://sessiondirectory.xboxlive.com/handles', { ...options, data, contractVersion: '107' })
-  }
-
-  createSession (options = {}) {
-    return XboxSession.open(this, null, options)
-  }
-
-  joinSession (name, options = {}) {
-    if (typeof name !== 'string' || !name) throw new TypeError('Session name is required')
-    return XboxSession.open(this, name, options)
-  }
+  return client
 }
-module.exports = { XboxClient }
+module.exports = { createXboxClient }

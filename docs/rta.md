@@ -1,45 +1,45 @@
-# Xbox Real Time Activity (experimental)
+# Real Time Activity
 
 ```js
-const { XboxRTA } = require('prismarine-xbox-services')
-const rta = new XboxRTA(auth)
+const { connectRta } = require('prismarine-xbox-services')
+const rta = await connectRta(auth, { timeout: 15000, signal })
 rta.on('error', handleBackgroundFailure)
-rta.on('resync', refreshAuthoritativeState)
-try {
-  await rta.connect({ timeout: 15000, signal })
-  const subscription = await rta.subscribe('https://sessiondirectory.xboxlive.com/connections/')
-  console.log(subscription.data)
-  subscription.on('data', handleNotification)
-  subscription.on('ready', handleReplacementConnection)
-  // Keep consuming notifications for as long as needed.
-  await subscription.close()
-} finally {
-  await rta.close()
-}
+rta.on('resync', refreshServiceState)
+const subscription = await rta.subscribe(resourceUri)
+subscription.on('data', handleNotification)
+subscription.on('ready', handleReplacementSubscription)
+console.log(subscription.data)
+// Later:
+await subscription.close()
+await rta.close()
 ```
 
-- `connect({ timeout = 15000, signal } = {})` resolves once the WebSocket opens. Its deadline
-  covers credentials, nonce retrieval and handshake. The signal applies only to startup.
-- `subscribe(uri, { timeout = 30000, signal } = {})` returns a stable RtaSubscription.
-  Await connection first; disconnected requests reject instead of accumulating in a queue.
-- `subscription.data` contains the latest subscription response. `data` events carry change
-  notifications; `ready` events report subsequent subscription responses after reconnect.
-- Subscription identity and listeners survive reconnects. Wire IDs and sequence numbers are internal.
-- `subscription.close()` is idempotent, removes local listeners from routing, and unsubscribes
-  remotely when connected. It rejects if that remote request fails; the local subscription
-  remains closed. A disconnected subscription is removed from future restoration.
-- `close()` shuts down the connection and all its subscriptions. It is terminal and idempotent.
-- `reconnect()` explicitly replaces the connection and starts restoring subscriptions. Its
-  promise resolves at socket opening; each restored subscription emits `ready` when restored.
+`connectRta(auth, { timeout = 15000, signal } = {})` returns a connected Node EventEmitter.
+It waits for credentials, nonce retrieval and WebSocket opening. Failed startup releases its
+resources. Credentials come from auth.getXboxToken(); refresh policy belongs to that provider.
 
-Normal server closure emits `close(code, reason)` and permits later explicit connect/reconnect.
-Abnormal close (1006), heartbeat expiry, and 90-minute renewal initiate reconnection. Failed
-background reconnect/restoration emits `error`; there is no unbounded retry loop. A `resync`
-event tells callers to refresh authoritative service state.
+- `subscribe(uri, { timeout = 30000, signal } = {})` returns a subscription EventEmitter with
+  read-only `uri`, `data` and `closed`, plus an idempotent `close()`.
+- Subscription `data` events deliver resource notifications. `ready` reports replacement
+  subscription data after reconnect; the original data is available when subscribe resolves.
+- `reconnect({ timeout, signal } = {})` replaces the socket and restores subscriptions under
+  one deadline. It resolves after restoration. Concurrent reconnect calls share the active attempt.
+- `close()` terminates the connection and closes all subscriptions; it is idempotent and terminal.
 
-Awaited request failures reject only; they are not also emitted as errors. Independent transport
-failures still emit `error`, so callers need both an error listener and promise handling.
-Authentication refresh decisions stay with the credential provider.
+Subscription objects and their listeners survive reconnects; request IDs and server subscription
+IDs are private. Closing a subscription while reconnecting prevents its restoration. A late
+subscription acknowledgment after cancellation triggers an unsubscribe.
 
-Diagnostics: `DEBUG=prismarine-xbox-services:rta`. Public members are documented above;
-transport state and maps are implementation details. 
+Connection events: `resync`, `disconnect(code, reason)`, `error(error)` and terminal `close`.
+Abnormal disconnect (1006), a missed heartbeat and 90-minute renewal trigger a reconnect.
+Other disconnects permit an explicit reconnect. A failed background reconnect emits error;
+there is no indefinite retry loop. New subscriptions while disconnected or reconnecting reject instead of being queued.
+
+Explicit request failures reject their promises without duplicate error events. Register an
+error listener for independent transport and background failures. Startup/operation signals
+are scoped to that operation and are not retained as connection lifetime signals.
+
+The transport uses Node's ws EventEmitter interface, per-connection pending requests and
+abort signals. A ping/pong heartbeat detects an unresponsive connection. No token or nonce
+URLs are logged. Tests exercise public methods over local sockets rather than calling
+private protocol handlers. See [references](references.md).

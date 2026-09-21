@@ -22,14 +22,17 @@ export interface RequestOptions extends OperationOptions {
   contractVersion?: string
 }
 export interface Profile {
-  id: string
-  [key: string]: unknown
+  xuid: string
+  gamertag?: string
+  displayName?: string
+  avatarUrl?: string
 }
 export interface SessionProperties {
   system?: Record<string, unknown>
   custom?: Record<string, unknown>
 }
 export interface SessionDocument {
+  members?: Record<string, SessionMember | null>
   properties: SessionProperties
   [key: string]: unknown
 }
@@ -42,11 +45,15 @@ export interface ActivityHandle {
   sessionRef: SessionReference
   [key: string]: unknown
 }
-export interface CreateSessionOptions extends OperationOptions {
+export interface JoinSessionOptions extends OperationOptions {
+  publishActivity?: boolean
+}
+export interface CreateSessionOptions extends JoinSessionOptions {
+  name?: string
   properties?: SessionProperties | ((context: { profile: Profile }) => SessionProperties | Promise<SessionProperties>)
 }
-export class XboxClient {
-  constructor(authflow: XboxTokenProvider, options?: XboxOptions)
+export function createXboxClient(auth: XboxTokenProvider, options?: XboxOptions): XboxClient
+export interface XboxClient {
   request<T = unknown>(method: string, url: string, options?: RequestOptions): Promise<T | undefined>
   abortPending(): void
   getProfile(identifier?: UserIdentifier, options?: OperationOptions): Promise<Profile>
@@ -56,36 +63,45 @@ export class XboxClient {
   setActivity(name: string, options?: OperationOptions): Promise<unknown>
   sendInvite(name: string, xuid: string, options?: OperationOptions): Promise<unknown>
   createSession(options?: CreateSessionOptions): Promise<XboxSession>
-  joinSession(name: string, options?: OperationOptions): Promise<XboxSession>
+  joinSession(name: string, options?: JoinSessionOptions): Promise<XboxSession>
 }
-export class XboxSession extends EventEmitter {
-  private constructor()
+export interface SessionMember {
+  constants?: { system?: { xuid?: string; [key: string]: unknown } }
+  [key: string]: unknown
+}
+export interface XboxSession extends EventEmitter<{
+  changed: [current: SessionDocument, previous: SessionDocument]
+  memberJoin: [member: SessionMember]
+  memberLeave: [member: SessionMember]
+  propertiesChanged: [properties: SessionProperties]
+  error: [error: Error]
+  close: []
+}> {
   readonly name: string
   readonly state: 'opening' | 'open' | 'closing' | 'closed'
+  readonly snapshot: SessionDocument
+  setActivity(options?: OperationOptions): Promise<void>
   get(options?: OperationOptions): Promise<SessionDocument>
   updateProperties(properties: SessionProperties, options?: OperationOptions): Promise<void>
   invite(identifier: UserIdentifier, options?: OperationOptions): Promise<void>
   close(): Promise<void>
 }
-export class RtaSubscription<T = unknown> extends EventEmitter {
-  private constructor()
+export interface RtaSubscription<T = unknown> extends EventEmitter<{ ready: [data: T]; data: [data: T] }> {
   readonly uri: string
   readonly data: T
   readonly closed: boolean
   close(): Promise<void>
-  on(event: 'ready' | 'data', listener: (data: T) => void): this
-  on(event: string | symbol, listener: (...args: any[]) => void): this
 }
-export class XboxRTA extends EventEmitter {
-  constructor(authflow: XboxTokenProvider)
-  connect(options?: OperationOptions): Promise<void>
-  reconnect(): Promise<void>
+export function connectRta(auth: XboxTokenProvider, options?: OperationOptions): Promise<RtaConnection>
+export interface RtaConnection extends EventEmitter<{
+  resync: []
+  disconnect: [code: number, reason: string]
+  error: [error: Error]
+  close: []
+}> {
+  reconnect(options?: OperationOptions): Promise<void>
   subscribe<T = unknown>(uri: string, options?: OperationOptions): Promise<RtaSubscription<T>>
   close(): Promise<void>
-  on(event: 'resync', listener: () => void): this
-  on(event: 'close', listener: (code: number, reason: string) => void): this
-  on(event: 'error', listener: (error: Error) => void): this
-  on(event: string | symbol, listener: (...args: any[]) => void): this
 }
 export class ServiceError extends Error {
   constructor(service: string, status: number, body: string, details?: { error?: string; errorMessage?: string; errorCode?: number; errorDetails?: Record<string, unknown> })
@@ -107,8 +123,21 @@ export interface PlayFabOptions {
 export interface PlayFabRequestOptions extends OperationOptions {
   auth?: 'session' | 'entity'
 }
-export class PlayFabClient {
-  constructor(getCredentials: () => PlayFabCredentials | Promise<PlayFabCredentials>, options: PlayFabOptions)
+export interface CloudScriptOptions {
+  functionName: string
+  functionParameter?: unknown
+  generatePlayStreamEvent?: boolean
+  revisionSelection?: 'Live' | 'Latest' | 'Specific'
+  specificRevision?: number
+}
+export interface TitleData { Data?: Record<string, string> }
+export interface UserInventory { Inventory?: Record<string, unknown>[]; [key: string]: unknown }
+export interface CloudScriptResult { FunctionResult?: unknown; Error?: Record<string, unknown>; [key: string]: unknown }
+export function createPlayFabClient(getCredentials: () => PlayFabCredentials | Promise<PlayFabCredentials>, options: PlayFabOptions): PlayFabClient
+export interface PlayFabClient {
+  getTitleData(query?: { keys?: string[] }, options?: OperationOptions): Promise<TitleData | undefined>
+  getUserInventory(options?: OperationOptions): Promise<UserInventory | undefined>
+  executeCloudScript(input: CloudScriptOptions, options?: OperationOptions): Promise<CloudScriptResult | undefined>
   request<T = unknown>(path: string, data?: unknown, options?: PlayFabRequestOptions): Promise<T | undefined>
   abortPending(): void
 }

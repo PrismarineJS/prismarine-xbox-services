@@ -39,8 +39,7 @@
     "src/",
     "types/",
     "docs/",
-    "HISTORY.md",
-    "licenses/"
+    "HISTORY.md"
   ],
   "engines": {
     "node": ">=22"
