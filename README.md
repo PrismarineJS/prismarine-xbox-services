@@ -2,11 +2,17 @@
 
 [![Build Status](https://github.com/PrismarineJS/prismarine-xbox-services/actions/workflows/ci.yml/badge.svg)](https://github.com/PrismarineJS/prismarine-xbox-services/actions/workflows/ci.yml)
 
-Xbox and PlayFab services API for Node.js.
+Node.js library for Xbox and PlayFab services API using prismarine-auth.
+
+## Install
+
+The API is experimental.
+
+```md
+npm install PrismarineJS/prismarine-xbox-services
+```
 
 ## Usage
-
-Node.js 24 or newer is required. The API is experimental; coordinate version updates with consumers.
 
 ```js
 const { XboxClient } = require('prismarine-xbox-services')
@@ -35,8 +41,6 @@ Tests cover mocked service boundaries and local WebSocket connections. Live auth
 Xbox and PlayFab integration still needs verification with title-specific credentials.
 
 ## Development
-
-Use Node.js 24 or newer.
 
 ```sh
 git clone https://github.com/PrismarineJS/prismarine-xbox-services.git
